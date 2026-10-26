@@ -9,7 +9,8 @@ from .db import connect, insert_rows, load_tables
 from .metrics import MetricContext, compute_all
 
 SOURCE_TABLES = ["accounts", "regions", "partners", "modules", "subscriptions", "subscription_events",
-                 "devices", "usage_weekly", "otc_weekly", "tickets", "reviews", "surveys", "contacts"]
+                 "devices", "usage_weekly", "otc_weekly", "module_kpi_weekly", "tickets", "reviews", "surveys",
+                 "contacts"]
 
 
 def analyse(conn=None, as_of=AS_OF, journal_conn=None, history=True):
@@ -36,6 +37,7 @@ def analyse(conn=None, as_of=AS_OF, journal_conn=None, history=True):
             health_rows.append({"account_id": m["account_id"], "as_of": day.isoformat(), **h})
             if k == 0:
                 m["health"] = h["total"]
+                m["module_health"] = health.module_scores(m)
                 conn.execute("INSERT INTO account_metrics VALUES (?, ?, ?)",
                              (m["account_id"], day.isoformat(), json.dumps(m, default=str)))
                 for s in signals.evaluate(m, rules, prices):

@@ -8,6 +8,8 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+from . import catalog
+
 from .config import AS_OF as SNAPSHOT_DATE  # date the device snapshot was taken
 
 # Shown on the "How it works" page: metric -> (source system, meaning)
@@ -58,13 +60,16 @@ class MetricContext:
         self.partners = tables["partners"].set_index("id")
         self.groups = {}
         for name in ["subscriptions", "subscription_events", "devices", "usage_weekly", "otc_weekly",
-                     "tickets", "reviews", "surveys", "contacts"]:
+                     "module_kpi_weekly", "tickets", "reviews", "surveys", "contacts"]:
             df = tables[name].copy()
             for col in ["start_date", "end_date", "date", "onboarded_on", "last_seen", "week_start",
                         "opened_on", "closed_on", "left_on"]:
                 if col in df.columns:
                     df[col] = df[col].map(lambda v: date.fromisoformat(v) if isinstance(v, str) else None)
             self.groups[name] = _by_account(df)
+        # Add-ons (e.g. OT Companion features) count towards their parent module.
+        mods = tables["modules"]
+        self.parent = {r.code: (r.parent_code if isinstance(r.parent_code, str) else r.code) for r in mods.itertuples()}
         # Completed CSM actions (calls, visits, reviews) from the journal.
         self.touches = {}
         for t in touches:
@@ -98,6 +103,10 @@ def compute(ctx, account_id, as_of, country_arr=None):
         "nis2_in_scope": bool(acc["nis2_in_scope"]),
         "nis2_status": ctx.regions.loc[acc["country"], "nis2_status"],
         "size_factor": float(acc["size_factor"]),
+        "is_grid_operator": acc["segment"] in ("DSO", "TSO", "Municipal utility"),
+        "grid_constrained": bool(acc["grid_constrained"]),
+        "grid_area": acc["grid_area"] if isinstance(acc["grid_area"], str) else None,
+        "grid_pressure": ctx.regions.loc[acc["country"], "grid_pressure"],
     }
 
     # Commercial ------------------------------------------------------------------
@@ -162,6 +171,30 @@ def compute(ctx, account_id, as_of, country_arr=None):
         m["active_sites"] = 0
         m["new_sites_90d"] = 0
         m["usage_by_module"] = {}
+
+    # Module ARR (add-ons included in their parent), used to weight module health.
+    weights = {}
+    for r in subs.itertuples():
+        parent = ctx.parent.get(r.module_code, r.module_code)
+        weights[parent] = weights.get(parent, 0) + r.annual_value_eur
+    m["module_arr"] = {k: int(v) for k, v in weights.items() if k != "BASE"}
+
+    # Outcome KPIs of the other modules (catalog.toml): mean of the last 2 weeks ----------
+    kpi_rows = ctx.table("module_kpi_weekly", account_id)
+    if not kpi_rows.empty:
+        kpi_rows = kpi_rows[kpi_rows["week_start"] < as_of]
+    m["module_kpis"] = {}
+    for kpi in catalog.kpis():
+        name = catalog.metric_name(kpi)
+        m[name] = None
+        if kpi["module"] not in codes or kpi_rows.empty:
+            continue
+        series = kpi_rows[(kpi_rows["module_code"] == kpi["module"]) & (kpi_rows["kpi"] == kpi["id"])]
+        if series.empty:
+            continue
+        values = series.sort_values("week_start")["value"]
+        m[name] = round(float(values.iloc[-2:].mean()), 3)
+        m["module_kpis"].setdefault(kpi["module"], {})[kpi["id"]] = m[name]
 
     # OT Companion outcomes -------------------------------------------------------------
     otc = ctx.table("otc_weekly", account_id)

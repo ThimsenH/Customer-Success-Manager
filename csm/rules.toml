@@ -3,6 +3,7 @@
 # Each rule fires when ALL conditions in `when` hold: [metric, operator, value].
 # Metrics are listed on the "How it works" page; `health` is the total health score.
 # `reason` can use any metric, e.g. {usage_change_pct:+.0%}.
+# `area` groups signals into the three problem areas: Security, Capacity, Reliability (or General).
 # `action` is the decision suggested to the CSM (they can pick another).
 # Expansion rules name a `module` and a `value` estimate:
 #   "list"      = module list price x account size
@@ -19,6 +20,7 @@ id = "R01"
 kind = "risk"
 title = "Usage dropping"
 severity = "high"
+area = "General"
 action = "Call"
 when = [["usage_change_pct", "<=", -0.30]]
 reason = "Active users {usage_change_pct:+.0%} compared with three months ago."
@@ -29,6 +31,7 @@ id = "R02"
 kind = "risk"
 title = "Renewal at risk"
 severity = "critical"
+area = "General"
 action = "On-site visit"
 when = [["days_to_renewal", "<=", 90], ["health", "<", 60]]
 reason = "Renewal in {days_to_renewal} days with a health score of {health:.0f}."
@@ -39,6 +42,7 @@ id = "R03"
 kind = "risk"
 title = "Everything depends on one person"
 severity = "medium"
+area = "General"
 action = "Training / workshop"
 when = [["top_user_share", ">=", 0.70]]
 reason = "{top_user_share:.0%} of all activity comes from a single user."
@@ -49,6 +53,7 @@ id = "R04"
 kind = "risk"
 title = "Champion has left"
 severity = "high"
+area = "General"
 action = "Call"
 when = [["champion_left_days", "<=", 120]]
 reason = "The main champion left {champion_left_days} days ago."
@@ -59,6 +64,7 @@ id = "R05"
 kind = "risk"
 title = "No executive sponsor"
 severity = "high"
+area = "General"
 action = "Call"
 when = [["sponsor_present", "==", false]]
 reason = "No executive sponsor at the customer (the previous one left or none was named)."
@@ -69,6 +75,7 @@ id = "R06"
 kind = "risk"
 title = "Onboarding stalled"
 severity = "high"
+area = "General"
 action = "On-site visit"
 when = [["device_online_ratio", "<", 0.5], ["days_since_start", ">=", 90]]
 reason = "Only {devices_online} of {devices_contracted} contracted devices are online after {days_since_start} days."
@@ -79,6 +86,7 @@ id = "R07"
 kind = "risk"
 title = "Devices went offline"
 severity = "medium"
+area = "General"
 action = "Email / check-in"
 when = [["devices_offline", ">=", 3]]
 reason = "{devices_offline} connected devices have not reported for more than 7 days."
@@ -89,6 +97,7 @@ id = "R08"
 kind = "risk"
 title = "Vulnerability alerts nobody looks at"
 severity = "high"
+area = "Security"
 action = "Call"
 when = [["crit_vulns_unack", ">=", 10]]
 reason = "{crit_vulns_unack} critical or high CVEs on their own devices have never been acknowledged."
@@ -99,6 +108,7 @@ id = "R09"
 kind = "risk"
 title = "Slow patching"
 severity = "medium"
+area = "Security"
 action = "Success review / QBR"
 when = [["mttp_days", ">", 60]]
 reason = "Critical vulnerabilities take {mttp_days:.0f} days to patch on average (target: 30)."
@@ -109,6 +119,7 @@ id = "R10"
 kind = "risk"
 title = "Critical tickets open"
 severity = "high"
+area = "General"
 action = "Escalate internally"
 when = [["crit_tickets_open", ">=", 2]]
 reason = "{crit_tickets_open} critical support tickets are open."
@@ -119,6 +130,7 @@ id = "R11"
 kind = "risk"
 title = "Support load rising"
 severity = "medium"
+area = "General"
 action = "Call"
 when = [["tickets_90d", ">=", 8]]
 reason = "{tickets_90d} tickets in the last 90 days."
@@ -129,6 +141,7 @@ id = "R12"
 kind = "risk"
 title = "Review overdue"
 severity = "medium"
+area = "General"
 action = "Success review / QBR"
 when = [["days_since_review", ">=", 180]]
 reason = "Last success review was {days_since_review} days ago."
@@ -139,6 +152,7 @@ id = "R13"
 kind = "risk"
 title = "No agreed objectives"
 severity = "low"
+area = "General"
 action = "Success review / QBR"
 when = [["objectives_documented", "==", false]]
 reason = "The latest review has no written objectives, so success is not defined."
@@ -149,6 +163,7 @@ id = "R14"
 kind = "risk"
 title = "Downgrade"
 severity = "critical"
+area = "General"
 action = "Call"
 when = [["downgrade_180d", "==", true]]
 reason = "The customer downgraded in the Subscription Manager within the last 180 days."
@@ -159,6 +174,7 @@ id = "R15"
 kind = "risk"
 title = "Low satisfaction"
 severity = "medium"
+area = "General"
 action = "Call"
 when = [["nps_latest", "<=", 6]]
 reason = "Latest NPS answer: {nps_latest}."
@@ -169,6 +185,7 @@ id = "R16"
 kind = "risk"
 title = "Key account under pressure"
 severity = "critical"
+area = "General"
 action = "On-site visit"
 when = [["country_arr_share", ">=", 0.25], ["health", "<", 75]]
 reason = "Holds {country_arr_share:.0%} of the region's ARR and health is {health:.0f}. Losing it would hit the region hard."
@@ -179,6 +196,7 @@ id = "R17"
 kind = "risk"
 title = "No direct view (partner-led)"
 severity = "medium"
+area = "General"
 action = "Go through partner"
 when = [["channel", "==", "Partner"], ["days_since_direct_touch", ">=", 180]]
 reason = "Siemens has not met the customer directly for {days_since_direct_touch} days. Only the partner has."
@@ -189,10 +207,136 @@ id = "R18"
 kind = "risk"
 title = "Licences unused"
 severity = "medium"
+area = "General"
 action = "Training / workshop"
 when = [["license_utilization", "<", 0.30], ["days_since_start", ">=", 90]]
 reason = "Only {license_utilization:.0%} of licensed users are active."
 playbook = "Find out who should be using it and why they are not. Offer role-based training."
+
+# ---------------------------------------------------------------------------
+# Risk: the other modules (KPIs from catalog.toml)
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "R19"
+kind = "risk"
+title = "Autonomous grid control switched off"
+severity = "high"
+area = "Capacity"
+action = "On-site visit"
+when = [["kpi_DGM_autonomous_share", "<", 0.5]]
+reason = "Only {kpi_DGM_autonomous_share:.0%} of feeders run under autonomous management (target 80%). Operators may not trust it."
+playbook = "Visit the control room. Find out why operators switch autonomy off and review the curtailment settings together."
+
+[[rule]]
+id = "R20"
+kind = "risk"
+title = "Overloads not mitigated"
+severity = "high"
+area = "Capacity"
+action = "Call"
+when = [["kpi_DGM_unmitigated_overloads", ">", 3]]
+reason = "{kpi_DGM_unmitigated_overloads:.1f} overloads a week are not mitigated (target: at most 2)."
+playbook = "Check which feeders overload and whether flexible assets are configured for curtailment."
+
+[[rule]]
+id = "R21"
+kind = "risk"
+title = "Charging network breaching the DSO limit"
+severity = "high"
+area = "Capacity"
+action = "Call"
+when = [["kpi_LM_limit_breaches", ">", 2]]
+reason = "The DSO power limit is breached {kpi_LM_limit_breaches:.1f} times a week."
+playbook = "Review the load limits and the setpoint the DSO sends. Repeated breaches can cost the customer their connection terms."
+
+[[rule]]
+id = "R22"
+kind = "risk"
+title = "Chargers going offline"
+severity = "high"
+area = "Capacity"
+action = "Call"
+when = [["kpi_LM_chargers_online", "<", 0.93]]
+reason = "Only {kpi_LM_chargers_online:.0%} of chargers are online."
+playbook = "Go through the offline chargers with the operator and check whether remote resets were tried."
+
+[[rule]]
+id = "R23"
+kind = "risk"
+title = "Monitoring only, control never used"
+severity = "medium"
+area = "Capacity"
+action = "Training / workshop"
+when = [["kpi_PRM_active_control_share", "<", 0.3]]
+reason = "Only {kpi_PRM_active_control_share:.0%} of sites are under active control. The customer pays for control but only watches."
+playbook = "Run a workshop on setpoints and load control for one site, then roll out."
+
+[[rule]]
+id = "R24"
+kind = "risk"
+title = "Energy reports nobody opens"
+severity = "medium"
+area = "Capacity"
+action = "Call"
+when = [["kpi_SEM_reports_opened", "<", 0.3]]
+reason = "Only {kpi_SEM_reports_opened:.0%} of scheduled energy reports are opened."
+playbook = "Ask who should use the reports and for what decision. Adjust the reports to that."
+
+[[rule]]
+id = "R25"
+kind = "risk"
+title = "No energy targets set"
+severity = "low"
+area = "Capacity"
+action = "Success review / QBR"
+when = [["kpi_SEM_targets_set", "<", 1]]
+reason = "No energy or emission targets are tracked, so the module can't show progress."
+playbook = "Agree one or two targets with the customer (e.g. kWh per site, scope 2 emissions)."
+
+[[rule]]
+id = "R26"
+kind = "risk"
+title = "Fault location getting slower"
+severity = "high"
+area = "Reliability"
+action = "Call"
+when = [["kpi_NFM_fault_locate_min", ">", 45]]
+reason = "Locating a fault takes {kpi_NFM_fault_locate_min:.0f} minutes (target 30); fault records retrieved automatically: {kpi_NFM_auto_records:.0%}."
+playbook = "Check relay connectivity and which fault records still come in manually."
+
+[[rule]]
+id = "R27"
+kind = "risk"
+title = "Alarm flood"
+severity = "medium"
+area = "Reliability"
+action = "Training / workshop"
+when = [["kpi_ASSET_alarm_ack", "<", 0.7]]
+reason = "Only {kpi_ASSET_alarm_ack:.0%} of asset alarms are acknowledged on time."
+playbook = "Review alarm thresholds with the operators; too many alarms means nobody reads them."
+
+[[rule]]
+id = "R28"
+kind = "risk"
+title = "SIEM log collectors offline"
+severity = "high"
+area = "Security"
+action = "Escalate internally"
+when = [["kpi_SIEM_log_sources_online", "<", 0.85]]
+reason = "Only {kpi_SIEM_log_sources_online:.0%} of log collectors are online, so attacks on those sites go unseen."
+playbook = "Get the SIEM team to check the collectors with the customer's OT team this week."
+
+[[rule]]
+id = "R29"
+kind = "risk"
+title = "Security incidents left untriaged"
+severity = "high"
+area = "Security"
+action = "Call"
+when = [["kpi_SIEM_incidents_triaged", "<", 0.75]]
+reason = "Only {kpi_SIEM_incidents_triaged:.0%} of incidents are triaged within 24 h (mean time to detect {kpi_SIEM_mttd_hours:.1f} h)."
+playbook = "Find out who handles incidents and whether they have the capacity. A small team may need help."
 
 # ---------------------------------------------------------------------------
 # Expansion: usage or context that suggests a next step
@@ -203,9 +347,10 @@ id = "E01"
 kind = "expansion"
 title = "Close to the device limit"
 severity = "medium"
+area = "General"
 action = "Involve Sales"
-module = "BASE"
-value = "arr:0.20"
+module = "HW_GATEWAY"
+value = "list"
 when = [["device_online_ratio", ">=", 0.92], ["devices_contracted", ">", 0]]
 reason = "{devices_online} of {devices_contracted} contracted devices are in use."
 playbook = "Check rollout plans with the customer before they hit the limit. Bring the forecast to Sales."
@@ -215,6 +360,7 @@ id = "E02"
 kind = "expansion"
 title = "Rolling out to new sites"
 severity = "medium"
+area = "General"
 action = "Involve Sales"
 module = "BASE"
 value = "arr:0.25"
@@ -227,6 +373,7 @@ id = "E03"
 kind = "expansion"
 title = "Substations already connected"
 severity = "medium"
+area = "Security"
 action = "Involve Sales"
 module = "OTC"
 value = "list"
@@ -239,6 +386,7 @@ id = "E04"
 kind = "expansion"
 title = "NIS2 pressure without OT security"
 severity = "high"
+area = "Security"
 action = "Call"
 module = "OTC"
 value = "list"
@@ -251,6 +399,7 @@ id = "E05"
 kind = "expansion"
 title = "Ready for detection (SIEM)"
 severity = "medium"
+area = "Security"
 action = "Involve Sales"
 module = "SIEM"
 value = "list"
@@ -263,6 +412,7 @@ id = "E06"
 kind = "expansion"
 title = "Patching handled outside the tool"
 severity = "medium"
+area = "Security"
 action = "Call"
 module = "OTC_PATCH"
 value = "list"
@@ -275,6 +425,7 @@ id = "E07"
 kind = "expansion"
 title = "Inventory without vulnerability monitoring"
 severity = "medium"
+area = "Security"
 action = "Call"
 module = "OTC_VULN"
 value = "list"
@@ -287,9 +438,114 @@ id = "E08"
 kind = "expansion"
 title = "Out of user licences"
 severity = "low"
+area = "General"
 action = "Involve Sales"
 module = "BASE"
 value = "arr:0.10"
 when = [["license_utilization", ">=", 0.90]]
 reason = "{license_utilization:.0%} of licensed users are active every week."
 playbook = "Ask which teams are waiting for access."
+
+[[rule]]
+id = "E09"
+kind = "expansion"
+title = "Grid at its limit"
+severity = "high"
+area = "Capacity"
+action = "On-site visit"
+module = "DGM"
+value = "list"
+when = [["is_grid_operator", "==", true], ["grid_constrained", "==", true], ["has_DGM", "==", false]]
+reason = "{grid_area}: new load can't be connected. Distribution Grid Management raises hosting capacity without new build."
+playbook = "Show how autonomous feeder management frees capacity, with figures from a comparable DSO."
+
+[[rule]]
+id = "E10"
+kind = "expansion"
+title = "Grid management delivering: more stations"
+severity = "medium"
+area = "Capacity"
+action = "Involve Sales"
+module = "HW_GRID"
+value = "list"
+when = [["has_DGM", "==", true], ["kpi_DGM_autonomous_share", ">=", 0.8], ["kpi_DGM_hosting_capacity_gain", ">=", 0.15], ["grid_constrained", "==", true]]
+reason = "Hosting capacity up {kpi_DGM_hosting_capacity_gain:.0%} where it runs, in a constrained area ({grid_area}). More stations with sensors and smart fuses extend that."
+playbook = "Map the next stations with the customer and bring the list to Sales."
+
+[[rule]]
+id = "E11"
+kind = "expansion"
+title = "Automatic load control for chargers"
+severity = "medium"
+area = "Capacity"
+action = "Call"
+module = "HW_DLM"
+value = "list"
+when = [["has_LM", "==", true], ["kpi_LM_limit_breaches", ">", 2]]
+reason = "{kpi_LM_limit_breaches:.1f} DSO limit breaches a week. A dynamic load management controller keeps sites under the limit automatically."
+playbook = "Fix the immediate breaches first, then show how a controller prevents them."
+
+[[rule]]
+id = "E12"
+kind = "expansion"
+title = "Faster fault location with sensors"
+severity = "medium"
+area = "Reliability"
+action = "Call"
+module = "HW_FSI"
+value = "list"
+when = [["has_NFM", "==", true], ["kpi_NFM_fault_locate_min", ">", 40]]
+reason = "Faults take {kpi_NFM_fault_locate_min:.0f} minutes to locate. Fault sensor indicators on overhead lines narrow down the location."
+playbook = "Identify the lines with the most faults and propose sensors there first."
+
+[[rule]]
+id = "E13"
+kind = "expansion"
+title = "Small team: managed detection"
+severity = "medium"
+area = "Security"
+action = "Call"
+module = "MDR"
+value = "list"
+when = [["has_SIEM", "==", true], ["has_MDR", "==", false], ["kpi_SIEM_incidents_triaged", "<", 0.8], ["size_factor", "<", 1.0]]
+reason = "Only {kpi_SIEM_incidents_triaged:.0%} of incidents are triaged on time and the team is small. MDR gives 24/7 monitoring without hiring."
+playbook = "Talk about who covers nights and holidays today. Position MDR as relief, not as criticism."
+
+[[rule]]
+id = "E14"
+kind = "expansion"
+title = "Control in place: add energy reporting"
+severity = "low"
+area = "Capacity"
+action = "Call"
+module = "SEM"
+value = "list"
+when = [["has_PRM", "==", true], ["has_SEM", "==", false], ["kpi_PRM_active_control_share", ">=", 0.6]]
+reason = "{kpi_PRM_active_control_share:.0%} of sites are under active control. Energy Management turns the same data into cost and emission reporting."
+playbook = "Offer a sample emissions report built from their own data."
+
+[[rule]]
+id = "E15"
+kind = "expansion"
+title = "NIS2 in force: start with an assessment"
+severity = "medium"
+area = "Security"
+action = "Call"
+module = "SVC_OTASSESS"
+value = "list"
+when = [["nis2_in_scope", "==", true], ["nis2_status", "==", "In force"], ["has_OTC", "==", false]]
+reason = "NIS2 is already in force in their country and there is no OT Companion. An OT security assessment gives a gap list quickly."
+playbook = "Offer the assessment as a low-risk first step; OT Companion is the natural follow-up."
+
+[[rule]]
+id = "E16"
+kind = "expansion"
+title = "Installation help"
+severity = "medium"
+area = "General"
+action = "Call"
+module = "SVC_ONBOARD"
+value = "list"
+when = [["device_online_ratio", "<", 0.5], ["days_since_start", ">=", 90]]
+reason = "Only {devices_online} of {devices_contracted} devices are connected. Hands-on installation support would unlock the subscription."
+playbook = "Offer installation days; this fixes value first and makes the renewal safer."

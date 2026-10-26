@@ -8,49 +8,68 @@ The random seed is fixed, so every run produces the same data.
 import random
 from datetime import date, timedelta
 
+from . import catalog
 from .config import AS_OF, HISTORY_WEEKS, SEED
 from .db import init_db, insert_rows
 
 REGIONS = [
     dict(country="NO", name="Norway", nis2_status="Expected", nis2_in_force=None,
          nis2_note="NIS1 applies (digitalsikkerhetsloven). NIS2 expected 2026, scope ~600 → ~5,000 organisations. Verify current status.",
-         market_note="Many customers and many open opportunities right now. The regulatory push is still ahead."),
+         market_note="Many customers and many open opportunities right now. The regulatory push is still ahead.",
+         grid_pressure="High",
+         grid_note="New connections above 5 MW north of Svartisen postponed indefinitely (1 MW in parts of Finnmark and Lofoten). EV share of new cars near 99%."),
     dict(country="DK", name="Denmark", nis2_status="In force", nis2_in_force="2025-07-01",
          nis2_note="Energy-sector act in force 7 Mar 2025, general act 1 Jul 2025.",
-         market_note="Only a few, large customers. Losing one would hit the region hard."),
+         market_note="Only a few, large customers. Losing one would hit the region hard.",
+         grid_pressure="Medium", grid_note="Long connection queues at Energinet; record EV sales in 2026."),
     dict(country="SE", name="Sweden", nis2_status="In force", nis2_in_force="2026-01-15",
          nis2_note="Cybersäkerhetslag (2025:1506) in force 15 Jan 2026.",
-         market_note="Customers are often reached only through partners, so Siemens sees less of the relationship directly."),
+         market_note="Customers are often reached only through partners, so Siemens sees less of the relationship directly.",
+         grid_pressure="Medium", grid_note="Svenska kraftnät is piloting capacity zones; capacity shortage around Mälardalen."),
     dict(country="FI", name="Finland", nis2_status="In force", nis2_in_force="2025-04-08",
          nis2_note="Kyberturvallisuuslaki 124/2025 in force 8 Apr 2025.",
-         market_note="No specific insight yet. A market to learn."),
+         market_note="No specific insight yet. A market to learn.",
+         grid_pressure="Medium", grid_note="Fingrid is developing flexible connection agreements to clear its queue."),
 ]
 
 MODULES = [
-    dict(code="BASE", name="Base Package (tenant)", cluster="Platform", parent_code=None, list_price_eur=12000,
+    dict(code="BASE", name="Base Package (tenant)", kind="Software", cluster="Platform", parent_code=None, list_price_eur=12000,
          description="Tenant and Connected Devices. Required for every feature set."),
-    dict(code="ASSET", name="Asset Management", cluster="Reliability", parent_code=None, list_price_eur=30000,
+    dict(code="ASSET", name="Asset Management", kind="Software", cluster="Reliability", parent_code=None, list_price_eur=30000,
          description="Asset transparency and condition monitoring at MV/LV level."),
-    dict(code="NFM", name="Network Fault Management", cluster="Reliability", parent_code=None, list_price_eur=25000,
+    dict(code="NFM", name="Network Fault Management", kind="Software", cluster="Reliability", parent_code=None, list_price_eur=25000,
          description="Fault localisation and fault records across the network."),
-    dict(code="OTC", name="OT Companion: OT Asset Transparency", cluster="Security", parent_code=None, list_price_eur=40000,
+    dict(code="OTC", name="OT Companion: OT Asset Transparency", kind="Software", cluster="Security", parent_code=None, list_price_eur=40000,
          description="OT inventory, baseline management, product catalogue (base feature)."),
-    dict(code="OTC_VULN", name="OT Companion: Vulnerability Management", cluster="Security", parent_code="OTC", list_price_eur=15000,
+    dict(code="OTC_VULN", name="OT Companion: Vulnerability Management", kind="Software", cluster="Security", parent_code="OTC", list_price_eur=15000,
          description="CVE-assessed vulnerability alerts for the customer's own devices (optional feature)."),
-    dict(code="OTC_PATCH", name="OT Companion: Patch Workflow", cluster="Security", parent_code="OTC", list_price_eur=15000,
+    dict(code="OTC_PATCH", name="OT Companion: Patch Workflow", kind="Software", cluster="Security", parent_code="OTC", list_price_eur=15000,
          description="IEC 62443-compliant patch task workflow (optional feature)."),
-    dict(code="SIEM", name="SIEM as a Service", cluster="Security", parent_code=None, list_price_eur=60000,
+    dict(code="SIEM", name="SIEM as a Service", kind="Software", cluster="Security", parent_code=None, list_price_eur=60000,
          description="Detection and response. Pairs with OT Companion via log collectors."),
-    dict(code="MDR", name="Managed Detection & Response", cluster="Security", parent_code=None, list_price_eur=80000,
+    dict(code="MDR", name="Managed Detection & Response", kind="Software", cluster="Security", parent_code=None, list_price_eur=80000,
          description="24/7 monitoring and incident analysis as a managed service."),
-    dict(code="SEM", name="Sustainability / Energy Management", cluster="Capacity", parent_code=None, list_price_eur=20000,
+    dict(code="SEM", name="Sustainability / Energy Management", kind="Software", cluster="Capacity", parent_code=None, list_price_eur=20000,
          description="Energy, cost and emissions across sites."),
-    dict(code="LM", name="Load Management", cluster="Capacity", parent_code=None, list_price_eur=25000,
+    dict(code="LM", name="Load Management", kind="Software", cluster="Capacity", parent_code=None, list_price_eur=25000,
          description="EV charging networks with dynamic load management."),
-    dict(code="DGM", name="Distribution Grid Management", cluster="Capacity", parent_code=None, list_price_eur=35000,
+    dict(code="DGM", name="Distribution Grid Management", kind="Software", cluster="Capacity", parent_code=None, list_price_eur=35000,
          description="Autonomous feeder management for MV/LV distribution."),
-    dict(code="PRM", name="Power Resource Management", cluster="Capacity", parent_code=None, list_price_eur=30000,
+    dict(code="PRM", name="Power Resource Management", kind="Software", cluster="Capacity", parent_code=None, list_price_eur=30000,
          description="Monitoring and control of industrial, PV and hybrid plants."),
+    # Hardware and services that software adoption pulls through (expansion only).
+    dict(code="HW_GATEWAY", name="Connected Devices (gateways)", kind="Hardware", cluster="Platform", parent_code=None,
+         list_price_eur=20000, description="IPC227E / SICAM GridEdge gateways for more sites."),
+    dict(code="HW_GRID", name="Grid sensors and smart fuses", kind="Hardware", cluster="Capacity", parent_code=None,
+         list_price_eur=25000, description="SICAM EGS sensors and SENTRON 3NA COM fuses for more stations."),
+    dict(code="HW_FSI", name="Fault sensor indicators", kind="Hardware", cluster="Reliability", parent_code=None,
+         list_price_eur=20000, description="SICAM FSI sensors for overhead-line fault location."),
+    dict(code="HW_DLM", name="Dynamic load management controller", kind="Hardware", cluster="Capacity", parent_code=None,
+         list_price_eur=15000, description="SICAM DLM for up to 250 charging stations."),
+    dict(code="SVC_ONBOARD", name="Installation and onboarding service", kind="Service", cluster="Platform",
+         parent_code=None, list_price_eur=10000, description="Hands-on help to connect devices and sites."),
+    dict(code="SVC_OTASSESS", name="OT security assessment", kind="Service", cluster="Security", parent_code=None,
+         list_price_eur=18000, description="IEC 62443 / NIS2 gap assessment of the OT estate."),
 ]
 
 # Modules with their own user activity (add-ons count towards their parent).
@@ -107,7 +126,7 @@ ACCOUNTS = [
          mods=["BASE", "ASSET", "OTC", "OTC_VULN"], scenario="Vulnerability alerts nobody triages",
          crit_open=34, unack_share=0.8, mttp=95, ack_rate=0.45),
     dict(name="Polarlading AS", country="NO", segment="Charge point operator", tier="Growth", size=0.9, sites=35,
-         mods=["BASE", "LM"], scenario="Growing charging network", new_sites=5, device_ratio=0.93, util=0.72),
+         mods=["BASE", "LM"], scenario="Growing charging network", grid="Nord-Norge (connections above 5 MW frozen)", new_sites=5, device_ratio=0.93, util=0.72),
     dict(name="Trollvegg Nett AS", country="NO", segment="DSO", tier="Core", size=1.3, sites=55,
          mods=["BASE", "ASSET", "OTC", "OTC_VULN", "OTC_PATCH"], scenario="Mature OT Companion, no SIEM",
          coverage=0.97, util=0.7),
@@ -165,6 +184,50 @@ ACCOUNTS = [
     dict(name="Koivu Teollisuus Oy", country="FI", segment="Industrial", tier="Growth", size=0.7, sites=5, partner=3,
          mods=["BASE", "SEM"], scenario="Low adoption close to renewal", util=0.15, renewal_in=80,
          partner_only_gap=190, nps=5, objectives=False),
+
+    # --- Whole portfolio: scenarios for the other modules (grid capacity in focus) ---
+    dict(name="Lofotlinja Nett AS", country="NO", segment="DSO", tier="Core", size=1.0, sites=40,
+         mods=["BASE", "ASSET", "DGM"], scenario="Autonomous mode switched off", grid="Lofoten (1 MW connection limit)",
+         kpis={"DGM.autonomous_share": (0.86, 0.22, 8), "DGM.unmitigated_overloads": (0.8, 4.5, 8),
+               "DGM.hosting_capacity_gain": (0.19, 0.05, 8)}, tickets_90d=6),
+    dict(name="Nordkyst Nett AS", country="NO", segment="DSO", tier="Core", size=1.2, sites=55,
+         mods=["BASE", "ASSET", "NFM"], scenario="Grid at its limit without Distribution Grid Management",
+         grid="Nord-Norge (connections above 5 MW frozen)"),
+    dict(name="Varanger Kraftnett AS", country="NO", segment="DSO", tier="Growth", size=0.9, sites=30,
+         mods=["BASE", "ASSET", "DGM"], scenario="Grid management delivering, ready for more stations",
+         grid="Øst-Finnmark (1 MW connection limit)", kpis={"DGM.hosting_capacity_gain": 0.24},
+         new_sites=3, device_ratio=0.97),
+    dict(name="Fjellading AS", country="NO", segment="Charge point operator", tier="Growth", size=0.8, sites=30,
+         mods=["BASE", "LM"], scenario="Charging network hitting the DSO limit", grid="Nord-Norge (connections above 5 MW frozen)",
+         kpis={"LM.limit_breaches": (0.3, 3.6, 10), "LM.remote_resolution": (0.78, 0.5, 10)}),
+    dict(name="Sognehamn Kraft AS", country="NO", segment="Industrial", tier="Growth", size=0.9, sites=5,
+         mods=["BASE", "PRM"], scenario="Shore power: monitoring only, control never switched on",
+         kpis={"PRM.active_control_share": 0.1}),
+    dict(name="Norrsken Laddnät AB", country="SE", segment="Charge point operator", tier="Growth", size=0.9, sites=40,
+         partner=2, mods=["BASE", "LM"], scenario="Chargers dropping offline, partner-run", partner_only_gap=200,
+         kpis={"LM.chargers_online": (0.985, 0.8, 8), "LM.remote_resolution": (0.78, 0.35, 8)}),
+    dict(name="Bergslagen Elnät AB", country="SE", segment="DSO", tier="Core", size=1.3, sites=60,
+         mods=["BASE", "ASSET", "OTC", "OTC_VULN", "SIEM"], scenario="SIEM log collectors offline", coverage=0.9,
+         kpis={"SIEM.log_sources_online": (0.97, 0.6, 6), "SIEM.incidents_triaged": (0.93, 0.62, 6),
+               "SIEM.mttd_hours": (3, 7, 6)}),
+    dict(name="Vätterstrand Energi AB", country="SE", segment="Municipal utility", tier="Growth", size=0.7, sites=15,
+         partner=1, mods=["BASE", "SEM"], scenario="Energy reports nobody opens", partner_only_gap=150,
+         kpis={"SEM.reports_opened": (0.65, 0.12, 14), "SEM.targets_set": 0}),
+    dict(name="Strömsholm Nät AB", country="SE", segment="DSO", tier="Core", size=1.4, sites=65,
+         mods=["BASE", "ASSET", "OTC", "OTC_VULN", "DGM"], scenario="Grid and security both delivering",
+         grid="Mälardalen (capacity shortage)", coverage=0.88),
+    dict(name="Pohjoisranta Verkko Oy", country="FI", segment="DSO", tier="Core", size=1.1, sites=48,
+         mods=["BASE", "ASSET", "NFM"], scenario="Fault location getting slower",
+         kpis={"NFM.fault_locate_min": (24, 56, 12), "NFM.auto_records": (0.88, 0.55, 12),
+               "NFM.alert_recipients": (6, 2, 12)}),
+    dict(name="Saaristo Sähkö Oy", country="FI", segment="DSO", tier="Growth", size=0.6, sites=20,
+         mods=["BASE", "OTC", "OTC_VULN", "SIEM"], scenario="Small team can't keep up with incidents", coverage=0.9,
+         kpis={"SIEM.incidents_triaged": (0.92, 0.52, 10), "SIEM.mttd_hours": (3, 9.5, 10)}),
+    dict(name="Merituuli Energia Oy", country="FI", segment="Generator", tier="Core", size=1.2, sites=12,
+         mods=["BASE", "PRM"], scenario="Wind fleet under active control, ready for energy reporting"),
+    dict(name="Terästehdas Oy", country="FI", segment="Industrial", tier="Growth", size=0.8, sites=4, partner=3,
+         mods=["BASE", "SEM", "PRM"], scenario="Energy targets never set", partner_only_gap=120,
+         kpis={"SEM.targets_set": 0, "SEM.reports_opened": 0.3}),
 ]
 
 FIRST_NAMES = {
@@ -194,6 +257,27 @@ def _slug(text):
     return "".join(ch for ch in text if ch.isalnum())
 
 
+def _kpi_value(kpi, override, weeks_ago, ramp, rng):
+    """One weekly KPI value: healthy by default, or a scenario's level or trend (start, end, over N weeks)."""
+    level = kpi["healthy"]
+    if isinstance(override, tuple):
+        start, end, n = override
+        level = start if weeks_ago > n else start + (end - start) * (n - weeks_ago + 1) / n
+    elif override is not None:
+        level = override
+    unit = kpi["unit"]
+    # Values that build up over time start lower while the module is new.
+    if kpi["better"] == "higher" and unit != "count":
+        level *= ramp
+    if unit == "share":
+        return round(min(1.0, max(0.0, level * rng.uniform(0.97, 1.02))), 3)
+    if unit == "count":
+        return float(max(0, round(level + rng.choice([-1, 0, 0, 0, 1])))) if level else 0.0
+    if unit == "per_week":
+        return round(max(0.0, level * rng.uniform(0.6, 1.4)), 2)
+    return round(level * rng.uniform(0.9, 1.1), 1)
+
+
 def _round_price(value):
     return int(round(value / 100.0) * 100)
 
@@ -202,12 +286,12 @@ def build(path=None):
     rng = random.Random(SEED)
     conn = init_db(path) if path else init_db()
     rows = {name: [] for name in ["accounts", "contacts", "reviews", "surveys", "tickets", "subscriptions",
-                                  "subscription_events", "devices", "usage_weekly", "otc_weekly"]}
+                                  "subscription_events", "devices", "usage_weekly", "otc_weekly", "module_kpi_weekly"]}
     ids = {name: 0 for name in rows}
 
     def add(table, **row):
         ids[table] += 1
-        if table not in ("usage_weekly", "otc_weekly"):
+        if table not in ("usage_weekly", "otc_weekly", "module_kpi_weekly"):
             row = {"id": ids[table], **row}
         rows[table].append(row)
         return ids[table]
@@ -235,7 +319,8 @@ def build(path=None):
         add("accounts", name=a["name"], country=a["country"], segment=a["segment"], tier=a["tier"],
             channel="Partner" if partner_id else "Direct", partner_id=partner_id, size_factor=a["size"],
             sites_total=a["sites"], ot_assets_expected=ot_expected, nis2_in_scope=nis2_scope,
-            contract_start=contract_start, renewal_date=renewal.isoformat(), scenario=a["scenario"])
+            contract_start=contract_start, renewal_date=renewal.isoformat(), scenario=a["scenario"],
+            grid_area=a.get("grid"), grid_constrained=int(bool(a.get("grid"))))
 
         # Contacts ------------------------------------------------------------
         names = rng.sample(FIRST_NAMES[a["country"]], 4)
@@ -347,6 +432,24 @@ def build(path=None):
                     mttp_days=round(a["mttp"] * rng.uniform(0.9, 1.1), 1) if has_vuln else None,
                     patch_tasks_created=created,
                     patch_tasks_completed=max(0, created - rng.randint(0, 2)) if has_patch else 0)
+
+        # Module outcome KPIs (catalog.toml) -----------------------------------------
+        # Own random stream per account, so adding KPIs never shifts the other data.
+        krng = random.Random(f"{SEED}-{a['name']}")
+        for sub in subs:
+            kpis = catalog.kpis_for(sub["module_code"])
+            if not kpis:
+                continue
+            sub_start = date.fromisoformat(sub["start_date"])
+            for k in range(HISTORY_WEEKS, 0, -1):
+                week = AS_OF - timedelta(weeks=k)
+                if week < sub_start:
+                    continue
+                ramp = min(1.0, 0.4 + (week - sub_start).days / 7 / 12)
+                for kpi in kpis:
+                    add("module_kpi_weekly", account_id=acc_id, module_code=sub["module_code"],
+                        week_start=week.isoformat(), kpi=kpi["id"],
+                        value=_kpi_value(kpi, a.get("kpis", {}).get(f"{kpi['module']}.{kpi['id']}"), k, ramp, krng))
 
         # Tickets ---------------------------------------------------------------
         for quarter in range(4):

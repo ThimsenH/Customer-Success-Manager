@@ -1,0 +1,209 @@
+# Module catalog: the outcome KPIs per Electrification X module.
+#
+# One entry per KPI. Adding a module or KPI here is enough for the generator,
+# metrics, health score and dashboard to pick it up. Rules in rules.toml refer
+# to a KPI as kpi_<MODULE>_<id>, e.g. kpi_DGM_autonomous_share.
+#
+#   better  = "higher" or "lower"
+#   target  = the level that counts as full value (health score 100 for this KPI)
+#   healthy = typical value at a customer that uses the module well (synthetic data)
+#   unit    = share | minutes | hours | per_week | count
+#
+# OT Companion is not in this file: it has its own, more detailed data (otc_weekly).
+
+# --- Asset Management ------------------------------------------------------------
+[[kpi]]
+module = "ASSET"
+id = "monitored_share"
+name = "Assets under condition monitoring"
+unit = "share"
+better = "higher"
+target = 0.80
+healthy = 0.86
+
+[[kpi]]
+module = "ASSET"
+id = "alarm_ack"
+name = "Alarms acknowledged on time"
+unit = "share"
+better = "higher"
+target = 0.90
+healthy = 0.93
+
+[[kpi]]
+module = "ASSET"
+id = "alerts_to_work_orders"
+name = "Condition alerts turned into maintenance work"
+unit = "share"
+better = "higher"
+target = 0.60
+healthy = 0.68
+
+# --- Network Fault Management --------------------------------------------------------
+[[kpi]]
+module = "NFM"
+id = "fault_locate_min"
+name = "Time to locate a fault"
+unit = "minutes"
+better = "lower"
+target = 30
+healthy = 24
+
+[[kpi]]
+module = "NFM"
+id = "auto_records"
+name = "Fault records retrieved automatically"
+unit = "share"
+better = "higher"
+target = 0.80
+healthy = 0.88
+
+[[kpi]]
+module = "NFM"
+id = "alert_recipients"
+name = "Staff receiving SMS/voice fault alerts"
+unit = "count"
+better = "higher"
+target = 4
+healthy = 6
+
+# --- SIEM as a Service ---------------------------------------------------------------
+[[kpi]]
+module = "SIEM"
+id = "log_sources_online"
+name = "Log collectors online"
+unit = "share"
+better = "higher"
+target = 0.95
+healthy = 0.97
+
+[[kpi]]
+module = "SIEM"
+id = "incidents_triaged"
+name = "Incidents triaged within 24 h"
+unit = "share"
+better = "higher"
+target = 0.90
+healthy = 0.93
+
+[[kpi]]
+module = "SIEM"
+id = "mttd_hours"
+name = "Mean time to detect"
+unit = "hours"
+better = "lower"
+target = 4
+healthy = 3
+
+# --- Managed Detection & Response ------------------------------------------------------
+[[kpi]]
+module = "MDR"
+id = "incidents_closed_sla"
+name = "Incidents closed within SLA"
+unit = "share"
+better = "higher"
+target = 0.95
+healthy = 0.97
+
+# --- Distribution Grid Management -------------------------------------------------------
+[[kpi]]
+module = "DGM"
+id = "autonomous_share"
+name = "Feeders under autonomous management"
+unit = "share"
+better = "higher"
+target = 0.80
+healthy = 0.88
+
+[[kpi]]
+module = "DGM"
+id = "unmitigated_overloads"
+name = "Overloads not mitigated"
+unit = "per_week"
+better = "lower"
+target = 2
+healthy = 0.8
+
+[[kpi]]
+module = "DGM"
+id = "hosting_capacity_gain"
+name = "Hosting capacity gained without new build"
+unit = "share"
+better = "higher"
+target = 0.15
+healthy = 0.19
+
+# --- Load Management ------------------------------------------------------------------
+[[kpi]]
+module = "LM"
+id = "chargers_online"
+name = "Chargers online"
+unit = "share"
+better = "higher"
+target = 0.97
+healthy = 0.985
+
+[[kpi]]
+module = "LM"
+id = "limit_breaches"
+name = "DSO power-limit breaches"
+unit = "per_week"
+better = "lower"
+target = 1
+healthy = 0.3
+
+[[kpi]]
+module = "LM"
+id = "remote_resolution"
+name = "Issues fixed remotely (no site visit)"
+unit = "share"
+better = "higher"
+target = 0.70
+healthy = 0.78
+
+# --- Power Resource Management -------------------------------------------------------------
+[[kpi]]
+module = "PRM"
+id = "active_control_share"
+name = "Sites under active control (not monitoring only)"
+unit = "share"
+better = "higher"
+target = 0.60
+healthy = 0.70
+
+[[kpi]]
+module = "PRM"
+id = "sites_reporting"
+name = "Sites reporting data"
+unit = "share"
+better = "higher"
+target = 0.95
+healthy = 0.97
+
+# --- Sustainability / Energy Management -----------------------------------------------------
+[[kpi]]
+module = "SEM"
+id = "sites_reporting"
+name = "Sites reporting data"
+unit = "share"
+better = "higher"
+target = 0.95
+healthy = 0.97
+
+[[kpi]]
+module = "SEM"
+id = "reports_opened"
+name = "Scheduled reports opened"
+unit = "share"
+better = "higher"
+target = 0.60
+healthy = 0.70
+
+[[kpi]]
+module = "SEM"
+id = "targets_set"
+name = "Energy targets tracked"
+unit = "count"
+better = "higher"
+target = 3
+healthy = 4

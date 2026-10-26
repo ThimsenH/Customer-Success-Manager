@@ -12,12 +12,15 @@ CREATE TABLE regions (
     nis2_status    TEXT NOT NULL,             -- 'In force' / 'Expected'
     nis2_in_force  TEXT,                      -- ISO date, null if not yet
     nis2_note      TEXT,
-    market_note    TEXT                       -- what we know about the market
+    market_note    TEXT,                      -- what we know about the market
+    grid_pressure  TEXT,                      -- High / Medium: how hard it is to connect new load
+    grid_note      TEXT
 );
 
 CREATE TABLE modules (
     code           TEXT PRIMARY KEY,
     name           TEXT NOT NULL,
+    kind           TEXT NOT NULL,             -- Software / Hardware / Service
     cluster        TEXT NOT NULL,             -- Platform / Security / Reliability / Capacity
     parent_code    TEXT REFERENCES modules(code),  -- add-ons point to their module
     list_price_eur INTEGER NOT NULL,          -- illustrative, per year, size factor 1.0
@@ -46,7 +49,9 @@ CREATE TABLE accounts (
     nis2_in_scope    INTEGER NOT NULL,        -- 0/1
     contract_start   TEXT NOT NULL,
     renewal_date     TEXT NOT NULL,
-    scenario         TEXT NOT NULL            -- demo story the generator built (not shown as data)
+    scenario         TEXT NOT NULL,           -- demo story the generator built (not shown as data)
+    grid_area        TEXT,                    -- constrained grid area, if any
+    grid_constrained INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE contacts (
@@ -146,6 +151,15 @@ CREATE TABLE otc_weekly (                     -- OT Companion outcome data
     PRIMARY KEY (account_id, week_start)
 );
 
+CREATE TABLE module_kpi_weekly (               -- outcome KPIs of the other modules (catalog.toml)
+    account_id   INTEGER NOT NULL REFERENCES accounts(id),
+    module_code  TEXT NOT NULL REFERENCES modules(code),
+    week_start   TEXT NOT NULL,
+    kpi          TEXT NOT NULL,
+    value        REAL NOT NULL,
+    PRIMARY KEY (account_id, module_code, week_start, kpi)
+);
+
 -- Analysis output ---------------------------------------------------------------
 
 CREATE TABLE account_metrics (
@@ -177,6 +191,7 @@ CREATE TABLE signals (
     reason         TEXT NOT NULL,
     playbook       TEXT NOT NULL,
     suggested_action TEXT,
+    area           TEXT,                      -- Security / Capacity / Reliability / General
     module_code    TEXT REFERENCES modules(code),
     est_value_eur  INTEGER
 );

@@ -9,13 +9,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from csm import generate, journal, links, pipeline
+from csm import catalog, generate, journal, links, pipeline
 from csm.config import AS_OF, HEALTH_BANDS, HEALTH_WEIGHTS, WEAKEST_PART_MARGIN
 from csm.db import DB_PATH, connect
 from csm.metrics import METRIC_DOCS
 from csm.signals import load_rules
-from csm.views import (CHECK, FIX, READY, effectiveness, journal_state, load, main_contact, needs_decision,
-                       region_summary, sales_note)
+from csm.views import (CHECK, FIX, READY, SOFTWARE, coverage, effectiveness, journal_state, load, main_contact,
+                       needs_decision, region_summary, sales_note)
 
 st.set_page_config(page_title="Nordic CS Radar", page_icon=":material/radar:", layout="wide")
 
@@ -32,10 +32,20 @@ READINESS_COLORS = {READY: STATUS["good"], CHECK: STATUS["warning"], FIX: STATUS
 READINESS_BADGE = {READY: ("green", "check_circle"), CHECK: ("orange", "visibility"), FIX: ("red", "build")}
 INK, INK_2, MUTED, GRID, AXIS, SURFACE = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 COUNTRY_NAMES = {"NO": "Norway", "DK": "Denmark", "SE": "Sweden", "FI": "Finland"}
+AREA_BADGE = {"Security": ("blue", "shield"), "Capacity": ("violet", "bolt"), "Reliability": ("orange", "build"),
+              "General": ("gray", "person"), "—": ("gray", "remove")}
+MODULE_SHORT = {"ASSET": "Asset Mgmt", "NFM": "Fault Mgmt", "OTC": "OT Companion", "SIEM": "SIEM", "MDR": "MDR",
+                "DGM": "Grid Mgmt", "LM": "Load Mgmt", "PRM": "Power Res.", "SEM": "Energy Mgmt"}
+COVERAGE_STYLE = {"Used well": "#dff3df", "Not delivering": "#fbe1d6", "Opportunity": "#dbe8fa",
+                  "Not used": "#f0efec", "Not relevant": "#fcfcfb"}
 
 
 def badge(label, color, icon):
     return f":{color}-badge[:material/{icon}: {label}]"
+
+
+def area_badge(area):
+    return badge(area, *AREA_BADGE.get(area, AREA_BADGE["General"]))
 
 
 def band_badge(band):
@@ -90,6 +100,8 @@ def db_is_current():
     try:
         conn.execute("SELECT suggested_action FROM signals LIMIT 1")
         conn.execute("SELECT email FROM contacts LIMIT 1")
+        conn.execute("SELECT area FROM signals LIMIT 1")
+        conn.execute("SELECT 1 FROM module_kpi_weekly LIMIT 1")
         return True
     except Exception:
         return False
@@ -401,6 +413,9 @@ def page_regions():
             a.metric("Open risks", r.open_risks)
             b.metric("Expansion", eur(r.expansion_eur), help=f"Ready now: {eur(r.expansion_ready_eur)}")
             st.caption(r.nis2_note)
+            grid_color = "red" if r.grid_pressure == "High" else "violet"
+            st.markdown(badge(f"Grid pressure: {r.grid_pressure}", grid_color, "bolt"))
+            st.caption(f"{r.grid_accounts} of our accounts are in constrained areas. {r.grid_note}")
 
     st.subheader("How concentrated is each region?")
     st.caption("Each block is one account's share of its region's ARR. Denmark rests on three accounts; "
@@ -449,7 +464,8 @@ def page_risk():
                "of its region's ARR. The same problem ranks higher where one customer carries the region.")
     risky = s[s["n_risks"] > 0].sort_values("priority", ascending=False)
 
-    table = risky[["id", "name", "country", "health", "band", "arr_eur", "days_to_renewal", "n_risks", "priority"]].copy()
+    table = risky[["id", "name", "country", "focus", "health", "band", "arr_eur", "days_to_renewal", "n_risks",
+                   "priority"]].copy()
     table["country"] = table["country"].map(COUNTRY_NAMES)
     open_sig = needs_decision(STATE)
     table["undecided"] = table["id"].map(open_sig[open_sig["kind"] == "risk"].groupby("account_id").size()).fillna(0).astype(int)
@@ -457,7 +473,7 @@ def page_risk():
     table["my_view"] = table["id"].map(view["rating"]) if not view.empty else None
     event = st.dataframe(table.drop(columns="id"), hide_index=True, width="stretch", on_select="rerun",
                          selection_mode="single-row", column_config={
-                             "name": "Account", "country": "Country",
+                             "name": "Account", "country": "Country", "focus": "Problem area",
                              "health": st.column_config.ProgressColumn("Health", min_value=0, max_value=100, format="%.0f"),
                              "band": "Band",
                              "arr_eur": st.column_config.NumberColumn("ARR", format="euro"),
@@ -480,7 +496,8 @@ def page_risk():
             open_button(btn, "Open account", f"radar-{r.id}", r.id)
             decide_button(btn, r.id, rs.loc[rs["status"] == "Needs decision", "rule_id"], f"decide-radar-{r.id}")
             for x in rs.itertuples():
-                st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])} **{x.title}**: {x.reason} "
+                area = f" {area_badge(x.area)}" if x.area != "General" else ""
+                st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])}{area} **{x.title}**: {x.reason} "
                             f"&nbsp; {status_badge(x.status)}  \n:gray[Next step: {x.playbook}]")
 
 
@@ -498,6 +515,12 @@ def page_expansion():
     cols[2].metric("Opportunities", len(o), border=True)
     cols[3].metric("Accounts", o["account_id"].nunique(), border=True)
 
+    kinds = st.segmented_control("Type", ["Software", "Hardware", "Service"], selection_mode="multi",
+                                 default=["Software", "Hardware", "Service"])
+    o = o[o["kind"].isin(kinds or ["Software", "Hardware", "Service"])]
+    if o.empty:
+        st.info("No opportunities of this type.")
+        return
     st.subheader("Potential by suggested module")
     by_mod = o.groupby(["module", "readiness"])["est_value_eur"].sum().reset_index()
     order = by_mod.groupby("module")["est_value_eur"].sum().sort_values().index.tolist()
@@ -544,7 +567,9 @@ def page_account():
     m = DATA["metrics"][acc_id]
     channel = f"partner-led via {a['partner']}" if a["channel"] == "Partner" else "direct"
     st.title(a["name"])
-    st.markdown(f"{band_badge(a['band'])} &nbsp; {COUNTRY_NAMES[a['country']]} · {a['segment']} · {a['tier']} · {channel}")
+    st.markdown(f"{band_badge(a['band'])} &nbsp; {COUNTRY_NAMES[a['country']]} · {a['segment']} · {a['tier']} · {channel}"
+                + (f" &nbsp; Main problem area: {area_badge(a['focus'])}" if a["focus"] != "—" else "")
+                + (f"  \n:violet[:material/bolt: Constrained grid: {m['grid_area']}]" if m["grid_area"] else ""))
 
     cols = st.columns(5)
     cols[0].metric("Health", f"{a['health']:.0f}", border=True)
@@ -632,27 +657,7 @@ def page_account():
         fig.update_yaxes(title="Weekly active users", rangemode="tozero")
         st.plotly_chart(style(fig, height=300), width="stretch")
 
-    if m["has_OTC"]:
-        st.subheader("OT Companion outcomes")
-        cols = st.columns(5)
-        cols[0].metric("Inventory coverage", f"{m['inventory_coverage']:.0%}",
-                       f"{m['ot_assets_inventoried']} of ~{m['ot_assets_expected']} assets", delta_color="off", delta_arrow="off", border=True)
-        cols[1].metric("Critical CVEs open", m["crit_vulns_open"] if m["crit_vulns_open"] is not None else "n/a", border=True)
-        cols[2].metric("Never acknowledged", m["crit_vulns_unack"] if m["crit_vulns_unack"] is not None else "n/a", border=True)
-        cols[3].metric("Mean time to patch", f"{m['mttp_days']:.0f} days" if m["mttp_days"] else "n/a", "target 30 days",
-                       delta_color="off", delta_arrow="off", border=True)
-        cols[4].metric("Patch tasks completed", f"{m['patch_completion']:.0%}" if m["patch_completion"] else "No workflow",
-                       border=True)
-        otc = DATA["otc_weekly"][DATA["otc_weekly"]["account_id"] == acc_id]
-        if m["has_OTC_VULN"] and not otc.empty:
-            fig = go.Figure()
-            for col, name, color in [("crit_vulns_open", "Open critical CVEs", SERIES[0]),
-                                     ("crit_vulns_unack", "Never acknowledged", SERIES[1])]:
-                fig.add_scatter(x=otc["week_start"], y=otc[col], mode="lines", name=name,
-                                line=dict(color=color, width=2), hovertemplate=name + " %{x}: %{y}<extra></extra>")
-            fig.update_layout(hovermode="x unified")
-            fig.update_yaxes(rangemode="tozero")
-            st.plotly_chart(style(fig, height=260), width="stretch")
+    module_outcomes(acc_id, m)
 
     st.subheader("Relationship")
     left, mid, right = st.columns(3)
@@ -661,8 +666,8 @@ def page_account():
         c = DATA["contacts"][DATA["contacts"]["account_id"] == acc_id]
         for x in c.itertuples():
             role = " · champion" if x.is_champion else (" · sponsor" if x.is_sponsor else "")
-            gone = f" :red[(left {x.left_on})]" if x.left_on else ""
-            chat = "" if x.left_on else f" · [Teams]({links.teams_chat([x.email], 'Hi ' + x.name.split()[0] + ',')})"
+            gone = f" :red[(left {x.left_on})]" if isinstance(x.left_on, str) else ""
+            chat = "" if isinstance(x.left_on, str) else f" · [Teams]({links.teams_chat([x.email], 'Hi ' + x.name.split()[0] + ',')})"
             st.markdown(f"{x.name}, {x.title}{role}{gone}{chat}")
     with mid:
         st.markdown("**Recent reviews**")
@@ -679,6 +684,122 @@ def page_account():
                     f"{int(((t['priority'] == 'Critical') & t['closed_on'].isna()).sum())} critical open")
         if not t.empty:
             st.markdown(", ".join(f"{k} ({v})" for k, v in t["topic"].value_counts().head(3).items()))
+
+
+def module_outcomes(acc_id, m):
+    """One tab per subscribed module: OT Companion in depth, the others from the KPI catalog."""
+    tabs = (["OTC"] if m["has_OTC"] else []) + [c for c in SOFTWARE if c != "OTC" and c in m["module_kpis"]]
+    if not tabs:
+        return
+    st.subheader("Module outcomes")
+    mods = DATA["modules"].set_index("code")
+    health = m.get("module_health", {})
+    labels = [f"{mods.loc[c, 'name'].split(':')[0]} · {health[c]:.0f}" if c in health else c for c in tabs]
+    for code, tab in zip(tabs, st.tabs(labels)):
+        with tab:
+            if code == "OTC":
+                otc_outcomes(acc_id, m)
+                continue
+            kpis = catalog.kpis_for(code)
+            hist = DATA["module_kpi_weekly"]
+            hist = hist[(hist["account_id"] == acc_id) & (hist["module_code"] == code)].sort_values("week_start")
+            st.caption(mods.loc[code, "description"])
+            cols = st.columns(len(kpis))
+            for col, kpi in zip(cols, kpis):
+                value = m["module_kpis"][code].get(kpi["id"])
+                series = hist[hist["kpi"] == kpi["id"]]["value"].tail(26).tolist()
+                ok = (catalog.score(kpi, value) or 0) >= 100
+                col.metric(kpi["name"], catalog.fmt(kpi, value), f"target {catalog.fmt(kpi, kpi['target'])}",
+                           delta_color="off", delta_arrow="off", border=True, chart_data=series, chart_type="line",
+                           help=("On target" if ok else "Below target") + f" · score {catalog.score(kpi, value):.0f}/100")
+
+
+def otc_outcomes(acc_id, m):
+    cols = st.columns(5)
+    cols[0].metric("Inventory coverage", f"{m['inventory_coverage']:.0%}",
+                   f"{m['ot_assets_inventoried']} of ~{m['ot_assets_expected']} assets", delta_color="off",
+                   delta_arrow="off", border=True)
+    cols[1].metric("Critical CVEs open", m["crit_vulns_open"] if m["crit_vulns_open"] is not None else "n/a", border=True)
+    cols[2].metric("Never acknowledged", m["crit_vulns_unack"] if m["crit_vulns_unack"] is not None else "n/a",
+                   border=True)
+    cols[3].metric("Mean time to patch", f"{m['mttp_days']:.0f} days" if m["mttp_days"] else "n/a", "target 30 days",
+                   delta_color="off", delta_arrow="off", border=True)
+    cols[4].metric("Patch tasks completed", f"{m['patch_completion']:.0%}" if m["patch_completion"] else "No workflow",
+                   border=True)
+    otc = DATA["otc_weekly"][DATA["otc_weekly"]["account_id"] == acc_id]
+    if m["has_OTC_VULN"] and not otc.empty:
+        fig = go.Figure()
+        for col, name, color in [("crit_vulns_open", "Open critical CVEs", SERIES[0]),
+                                 ("crit_vulns_unack", "Never acknowledged", SERIES[1])]:
+            fig.add_scatter(x=otc["week_start"], y=otc[col], mode="lines", name=name,
+                            line=dict(color=color, width=2), hovertemplate=name + " %{x}: %{y}<extra></extra>")
+        fig.update_layout(hovermode="x unified")
+        fig.update_yaxes(rangemode="tozero")
+        st.plotly_chart(style(fig, height=260), width="stretch")
+
+
+def page_coverage():
+    s, _ = filtered()
+    st.title("Coverage map")
+    st.caption("Every account against every module: where the suite delivers, where it doesn't, and where the "
+               "next module would fit. Numbers are module health (0–100) or the estimated value of an opportunity.")
+    cov = coverage(DATA)
+    cov = cov[cov["account_id"].isin(s["id"])]
+    st.markdown(" ".join(f"{badge(k, c, i)}" for k, c, i in [
+        ("Used well", "green", "check_circle"), ("Not delivering", "orange", "warning"),
+        ("Opportunity", "blue", "add_circle"), ("Not used", "gray", "radio_button_unchecked"),
+        ("Not relevant for this customer type", "gray", "remove")]))
+
+    # Module penetration among customers the module fits.
+    pen = []
+    for code in SOFTWARE:
+        c = cov[(cov["module_code"] == code) & (cov["state"] != "Not relevant")]
+        used = c["state"].isin(["Used well", "Not delivering"]).sum()
+        pen.append({"module": MODULE_SHORT[code], "used": used, "fit": len(c),
+                    "share": used / len(c) if len(c) else 0, "open": (c["state"] == "Opportunity").sum()})
+    pen = pd.DataFrame(pen)
+    st.subheader("Who uses what")
+    cov["label"] = cov.apply(lambda r: (f"{r.score:.0f}" if r.score == r.score and r.score is not None else "✓")
+                             if r.state in ("Used well", "Not delivering") else
+                             (f"+{eur(r.value)}" if r.state == "Opportunity" else
+                              ("–" if r.state == "Not relevant" else "")), axis=1)
+    grid = cov.pivot(index="account_id", columns="module_code", values="label")[SOFTWARE]
+    states = cov.pivot(index="account_id", columns="module_code", values="state")[SOFTWARE]
+    order = s.sort_values(["country", "arr_eur"], ascending=[True, False])
+    order = order[order["id"].isin(grid.index)]
+    grid, states = grid.loc[order["id"]], states.loc[order["id"]]
+    grid.index = [f"{n} ({c})" for n, c in zip(order["name"], order["country"])]
+    states.index = grid.index
+    grid.columns = [MODULE_SHORT[c] for c in SOFTWARE]
+    states.columns = grid.columns
+    styled = grid.style.apply(lambda _: states.map(lambda v: f"background-color: {COVERAGE_STYLE[v]}; "
+                                                             "color: #0b0b0b; text-align: center"), axis=None)
+    st.dataframe(styled, width="stretch", height=35 * len(grid) + 40)
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Penetration")
+        st.caption("Share of accounts that use a module, out of the accounts the module fits.")
+        p = pen.sort_values("share")
+        fig = go.Figure(go.Bar(y=p["module"], x=p["share"], orientation="h", marker_color=SERIES[0],
+                               text=[f"{u} of {f}" for u, f in zip(p["used"], p["fit"])], textposition="outside",
+                               hovertemplate="%{y}: %{x:.0%} of fitting accounts<extra></extra>"))
+        fig.update_xaxes(tickformat=".0%", range=[0, 1.2])
+        st.plotly_chart(style(fig, height=340, legend=False), width="stretch")
+    with right:
+        st.subheader("Signals by problem area")
+        sig = STATE["signals"]
+        sig = sig[sig["account_id"].isin(s["id"]) & sig["area"].isin(["Security", "Capacity", "Reliability"])]
+        by = sig.groupby(["area", "kind"]).size().unstack(fill_value=0).reindex(["Security", "Capacity", "Reliability"]).fillna(0)
+        fig = go.Figure()
+        for kind, color in [("risk", STATUS["critical"]), ("expansion", SERIES[0])]:
+            if kind in by:
+                fig.add_bar(name=kind.title(), y=by.index, x=by[kind], orientation="h", marker_color=color,
+                            marker_line=dict(color=SURFACE, width=2),
+                            hovertemplate="%{y} · " + kind + ": %{x}<extra></extra>")
+        fig.update_layout(barmode="stack")
+        st.plotly_chart(style(fig, height=340), width="stretch")
+        st.caption("Security dominates because OT Companion is the focus. Capacity signals cluster where the grid is "
+                   "constrained, mostly in northern Norway.")
 
 
 def your_view(acc_id, a):
@@ -899,6 +1020,19 @@ def page_method():
     } for r in load_rules()])
     st.dataframe(rules, hide_index=True, width="stretch")
 
+    st.subheader("Module catalog")
+    st.markdown("Each module's outcome KPIs, targets and direction come from `csm/catalog.toml`. A module's health is "
+                "the average KPI score; a KPI at target scores 100, at half the target (or double, for 'lower is "
+                "better') it scores 0. OT Companion has its own, more detailed data. The account's outcome score "
+                "is half the ARR-weighted module average and half the weakest module.")
+    mods = DATA["modules"].set_index("code")
+    st.dataframe(pd.DataFrame([{"Module": mods.loc[k["module"], "name"], "KPI": k["name"],
+                                "Target": catalog.fmt(k, k["target"]),
+                                "Better": k["better"]} for k in catalog.kpis()]), hide_index=True, width="stretch")
+    st.markdown("Expansion also covers **hardware and services** that software use pulls through: gateways, grid "
+                "sensors and smart fuses, fault sensor indicators, load management controllers, installation help "
+                "and OT security assessments.")
+
     st.subheader("Metrics")
     st.dataframe(pd.DataFrame([(k, src, desc) for k, (src, desc) in METRIC_DOCS.items()],
                               columns=["Metric", "Source", "Meaning"]), hide_index=True, width="stretch")
@@ -912,6 +1046,7 @@ PAGES = {
     "regions": st.Page(page_regions, title="Regions", icon=":material/public:", url_path="regions"),
     "risk": st.Page(page_risk, title="Risk radar", icon=":material/warning:", url_path="risk"),
     "expansion": st.Page(page_expansion, title="Expansion", icon=":material/trending_up:", url_path="expansion"),
+    "coverage": st.Page(page_coverage, title="Coverage map", icon=":material/grid_view:", url_path="coverage"),
     "account": st.Page(page_account, title="Account detail", icon=":material/apartment:", url_path="account"),
     "method": st.Page(page_method, title="How it works", icon=":material/schema:", url_path="how-it-works"),
 }

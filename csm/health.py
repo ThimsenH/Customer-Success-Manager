@@ -4,6 +4,7 @@ Deliberately simple and explainable: every part is a short formula over metrics
 the CSM can show the customer. Weights live in config.HEALTH_WEIGHTS.
 """
 
+from . import catalog
 from .config import HEALTH_WEIGHTS, WEAKEST_PART_MARGIN
 
 
@@ -35,18 +36,38 @@ def adoption(m):
     ]) or 0.0
 
 
+def otc_outcome(m):
+    cov = m["inventory_coverage"]
+    unack = m["crit_vulns_unack"]
+    mttp = m["mttp_days"]
+    return _avg([
+        (None if cov is None else _clamp(cov / 0.9), 1.0),
+        (None if unack is None else _clamp(1 - unack / 20), 1.0),
+        (None if mttp is None else _clamp((90 - mttp) / 60), 1.0),         # 30 days = full, 90 days = zero
+    ])
+
+
+def module_scores(m):
+    """Outcome score (0-100) per subscribed module: OT Companion from its own data, the others from catalog KPIs."""
+    scores = {}
+    if m["has_OTC"]:
+        scores["OTC"] = otc_outcome(m)
+    for module, values in m.get("module_kpis", {}).items():
+        kpis = {k["id"]: k for k in catalog.kpis_for(module)}
+        scores[module] = _avg([(catalog.score(kpis[kid], v), 1.0) for kid, v in values.items()])
+    return {k: round(v, 1) for k, v in scores.items() if v is not None}
+
+
 def outcomes(m):
+    """Alerts acknowledged, plus the modules' outcome scores: half the ARR-weighted average,
+    half the weakest module, so one module that isn't delivering can't hide behind the others."""
     ack = m["ack_rate"]
     parts = [(None if ack is None else _clamp((ack - 0.4) / 0.5), 1.0)]
-    if m["has_OTC"]:
-        cov = m["inventory_coverage"]
-        unack = m["crit_vulns_unack"]
-        mttp = m["mttp_days"]
-        parts += [
-            (None if cov is None else _clamp(cov / 0.9), 1.0),
-            (None if unack is None else _clamp(1 - unack / 20), 1.0),
-            (None if mttp is None else _clamp((90 - mttp) / 60), 1.0),     # 30 days = full, 90 days = zero
-        ]
+    scores = module_scores(m)
+    weights = {k: m["module_arr"].get(k, 0) for k in scores}
+    if scores and sum(weights.values()):
+        weighted = sum(scores[k] * weights[k] for k in scores) / sum(weights.values())
+        parts.append(((weighted + min(scores.values())) / 2, 3.0))
     return _avg(parts) or 0.0
 
 

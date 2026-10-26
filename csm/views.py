@@ -21,7 +21,7 @@ def readiness(health):
 
 def load(conn):
     data = load_tables(conn, ["accounts", "regions", "partners", "modules", "subscriptions", "usage_weekly",
-                              "otc_weekly", "contacts", "reviews", "tickets", "signals", "devices"])
+                              "otc_weekly", "module_kpi_weekly", "contacts", "reviews", "tickets", "signals", "devices"])
     data["health"] = read(conn, "SELECT * FROM health_scores")
     metrics = read(conn, "SELECT account_id, data_json FROM account_metrics WHERE as_of = ?", (AS_OF.isoformat(),))
     data["metrics"] = {int(r.account_id): json.loads(r.data_json) for r in metrics.itertuples()}
@@ -48,9 +48,55 @@ def account_summary(data):
     acc["band"] = acc["health"].map(health_band)
     critical = sig[(sig["kind"] == "risk") & (sig["severity"] == "critical")]["account_id"]
     acc["at_risk"] = (acc["health"] < 60) | acc["id"].isin(critical)
+    acc["focus"] = acc["id"].map(focus_areas(sig))
+    acc["focus"] = acc["focus"].fillna("—")
     # Same problem ranks higher where one account carries much of the region (Denmark).
     acc["priority"] = (acc["risk_points"] * (1 + 2 * acc["country_arr_share"])).round(1)
     return acc
+
+
+AREAS = ["Security", "Capacity", "Reliability"]
+SOFTWARE = ["ASSET", "NFM", "OTC", "SIEM", "MDR", "DGM", "LM", "PRM", "SEM"]
+# Which customer types a module fits (others show as "not relevant" on the coverage map).
+FIT = {
+    "NFM": {"DSO", "TSO", "Municipal utility"},
+    "DGM": {"DSO", "TSO", "Municipal utility"},
+    "LM": {"Charge point operator", "Industrial", "Data center"},
+    "PRM": {"Generator", "Industrial", "Data center"},
+}
+
+
+def focus_areas(sig):
+    """The problem area with the most pressure per account: risk severity points, plus half for opportunities."""
+    s = sig[sig["area"].isin(AREAS)].copy()
+    if s.empty:
+        return {}
+    s["w"] = s["points"] * s["kind"].map({"risk": 1.0, "expansion": 0.5})
+    best = s.groupby(["account_id", "area"])["w"].sum().reset_index().sort_values("w", ascending=False)
+    return best.drop_duplicates("account_id").set_index("account_id")["area"].to_dict()
+
+
+def coverage(data):
+    """Account x module grid: used well / not delivering / opportunity / not used / not relevant."""
+    s = data["summary"]
+    opp = data["opportunities"]
+    rows = []
+    for a in s.itertuples():
+        m = data["metrics"][a.id]
+        for code in SOFTWARE:
+            relevant = a.segment in FIT.get(code, {a.segment})
+            o = opp[(opp["account_id"] == a.id) & (opp["module_code"] == code)] if not opp.empty else opp
+            if m.get(f"has_{code}"):
+                score = m["module_health"].get(code)
+                state = "Used well" if score is None or score >= 70 else "Not delivering"
+            elif not o.empty:
+                state, score = "Opportunity", None
+            else:
+                state, score = ("Not used" if relevant else "Not relevant"), None
+            rows.append({"account_id": a.id, "account": a.name, "country": a.country, "module_code": code,
+                         "state": state, "score": score,
+                         "value": int(o["est_value_eur"].iloc[0]) if not o.empty else None})
+    return pd.DataFrame(rows)
 
 
 def opportunities(data):
@@ -72,7 +118,9 @@ def opportunities(data):
             "health": acc["health"],
             "readiness": readiness(acc["health"]),
             "module_code": code,
-            "module": "More devices, sites or users" if code == "BASE" else modules.loc[code, "name"],
+            "module": "More sites or users" if code == "BASE" else modules.loc[code, "name"],
+            "kind": "Software" if code == "BASE" else modules.loc[code, "kind"],
+            "area": g["area"].iloc[0],
             "est_value_eur": int(g["est_value_eur"].max()),
             "titles": list(g["title"]),
             "reasons": list(g["reason"]),
@@ -99,6 +147,9 @@ def region_summary(data):
             "nis2_status": r.nis2_status,
             "nis2_note": r.nis2_note,
             "market_note": r.market_note,
+            "grid_pressure": r.grid_pressure,
+            "grid_note": r.grid_note,
+            "grid_accounts": int(data["accounts"].loc[data["accounts"]["country"] == r.country, "grid_constrained"].sum()),
             "accounts": len(acc),
             "arr_eur": int(arr),
             "health_arr_weighted": round((acc["health"] * acc["arr_eur"]).sum() / arr, 1) if arr else None,
