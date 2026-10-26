@@ -1,0 +1,268 @@
+# Risk and expansion rules.
+#
+# Each rule fires when ALL conditions in `when` hold: [metric, operator, value].
+# Metrics are listed on the "How it works" page; `health` is the total health score.
+# `reason` can use any metric, e.g. {usage_change_pct:+.0%}.
+# Expansion rules name a `module` and a `value` estimate:
+#   "list"      = module list price x account size
+#   "arr:0.25"  = 25% of the account's current ARR (more sites, devices or users)
+#
+# Thresholds are starting points to tune with real data.
+
+# ---------------------------------------------------------------------------
+# Risk: signs a customer is not getting value or may not renew
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "R01"
+kind = "risk"
+title = "Usage dropping"
+severity = "high"
+when = [["usage_change_pct", "<=", -0.30]]
+reason = "Active users {usage_change_pct:+.0%} compared with three months ago."
+playbook = "Call the main user: what changed? Check for staff changes, a failed integration or a competing tool before the next review."
+
+[[rule]]
+id = "R02"
+kind = "risk"
+title = "Renewal at risk"
+severity = "critical"
+when = [["days_to_renewal", "<=", 90], ["health", "<", 60]]
+reason = "Renewal in {days_to_renewal} days with a health score of {health:.0f}."
+playbook = "Set up a value review with the sponsor now. Show results against their objectives and agree a plan. Involve Sales early."
+
+[[rule]]
+id = "R03"
+kind = "risk"
+title = "Everything depends on one person"
+severity = "medium"
+when = [["top_user_share", ">=", 0.70]]
+reason = "{top_user_share:.0%} of all activity comes from a single user."
+playbook = "Offer training for a second team (e.g. field technicians) and agree who owns OT security outcomes internally."
+
+[[rule]]
+id = "R04"
+kind = "risk"
+title = "Champion has left"
+severity = "high"
+when = [["champion_left_days", "<=", 120]]
+reason = "The main champion left {champion_left_days} days ago."
+playbook = "Find and onboard the successor within two weeks. Re-run a short kick-off so the new owner knows what was agreed."
+
+[[rule]]
+id = "R05"
+kind = "risk"
+title = "No executive sponsor"
+severity = "high"
+when = [["sponsor_present", "==", false]]
+reason = "No executive sponsor at the customer (the previous one left or none was named)."
+playbook = "Ask the champion who now owns the budget and the security outcome. Request an introduction meeting."
+
+[[rule]]
+id = "R06"
+kind = "risk"
+title = "Onboarding stalled"
+severity = "high"
+when = [["device_online_ratio", "<", 0.5], ["days_since_start", ">=", 90]]
+reason = "Only {devices_online} of {devices_contracted} contracted devices are online after {days_since_start} days."
+playbook = "Find out what blocks the installation (people, network access, firewall approval). Offer a joint installation day."
+
+[[rule]]
+id = "R07"
+kind = "risk"
+title = "Devices went offline"
+severity = "medium"
+when = [["devices_offline", ">=", 3]]
+reason = "{devices_offline} connected devices have not reported for more than 7 days."
+playbook = "Share the device list with the customer's OT team and check for network changes at those sites."
+
+[[rule]]
+id = "R08"
+kind = "risk"
+title = "Vulnerability alerts nobody looks at"
+severity = "high"
+when = [["crit_vulns_unack", ">=", 10]]
+reason = "{crit_vulns_unack} critical or high CVEs on their own devices have never been acknowledged."
+playbook = "Offer a triage session. Agree who reviews alerts each week. Without that, risk is not going down and the subscription looks like shelfware."
+
+[[rule]]
+id = "R09"
+kind = "risk"
+title = "Slow patching"
+severity = "medium"
+when = [["mttp_days", ">", 60]]
+reason = "Critical vulnerabilities take {mttp_days:.0f} days to patch on average (target: 30)."
+playbook = "Review the patch process with the customer. Look for approval or maintenance-window bottlenecks."
+
+[[rule]]
+id = "R10"
+kind = "risk"
+title = "Critical tickets open"
+severity = "high"
+when = [["crit_tickets_open", ">=", 2]]
+reason = "{crit_tickets_open} critical support tickets are open."
+playbook = "Escalate internally, agree a fix date and tell the customer personally. Don't let them hear it from the helpdesk only."
+
+[[rule]]
+id = "R11"
+kind = "risk"
+title = "Support load rising"
+severity = "medium"
+when = [["tickets_90d", ">=", 8]]
+reason = "{tickets_90d} tickets in the last 90 days."
+playbook = "Look for a common cause (training, configuration, product gap) and address it in one session rather than ticket by ticket."
+
+[[rule]]
+id = "R12"
+kind = "risk"
+title = "Review overdue"
+severity = "medium"
+when = [["days_since_review", ">=", 180]]
+reason = "Last success review was {days_since_review} days ago."
+playbook = "Schedule a success review with agreed objectives."
+
+[[rule]]
+id = "R13"
+kind = "risk"
+title = "No agreed objectives"
+severity = "low"
+when = [["objectives_documented", "==", false]]
+reason = "The latest review has no written objectives, so success is not defined."
+playbook = "Agree two or three measurable objectives with the customer at the next meeting."
+
+[[rule]]
+id = "R14"
+kind = "risk"
+title = "Downgrade"
+severity = "critical"
+when = [["downgrade_180d", "==", true]]
+reason = "The customer downgraded in the Subscription Manager within the last 180 days."
+playbook = "Ask why, openly. A downgrade is often the first step of a cancellation."
+
+[[rule]]
+id = "R15"
+kind = "risk"
+title = "Low satisfaction"
+severity = "medium"
+when = [["nps_latest", "<=", 6]]
+reason = "Latest NPS answer: {nps_latest}."
+playbook = "Follow up on the survey answer personally within a week."
+
+[[rule]]
+id = "R16"
+kind = "risk"
+title = "Key account under pressure"
+severity = "critical"
+when = [["country_arr_share", ">=", 0.25], ["health", "<", 75]]
+reason = "Holds {country_arr_share:.0%} of the region's ARR and health is {health:.0f}. Losing it would hit the region hard."
+playbook = "Treat as a top priority: executive alignment meeting, joint success plan, monthly check-ins until health recovers."
+
+[[rule]]
+id = "R17"
+kind = "risk"
+title = "No direct view (partner-led)"
+severity = "medium"
+when = [["channel", "==", "Partner"], ["days_since_direct_touch", ">=", 180]]
+reason = "Siemens has not met the customer directly for {days_since_direct_touch} days. Only the partner has."
+playbook = "Ask the partner for a joint review and share the usage data with them. Agree what the partner reports back each quarter."
+
+[[rule]]
+id = "R18"
+kind = "risk"
+title = "Licences unused"
+severity = "medium"
+when = [["license_utilization", "<", 0.30], ["days_since_start", ">=", 90]]
+reason = "Only {license_utilization:.0%} of licensed users are active."
+playbook = "Find out who should be using it and why they are not. Offer role-based training."
+
+# ---------------------------------------------------------------------------
+# Expansion: usage or context that suggests a next step
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "E01"
+kind = "expansion"
+title = "Close to the device limit"
+severity = "medium"
+module = "BASE"
+value = "arr:0.20"
+when = [["device_online_ratio", ">=", 0.92], ["devices_contracted", ">", 0]]
+reason = "{devices_online} of {devices_contracted} contracted devices are in use."
+playbook = "Check rollout plans with the customer before they hit the limit. Bring the forecast to Sales."
+
+[[rule]]
+id = "E02"
+kind = "expansion"
+title = "Rolling out to new sites"
+severity = "medium"
+module = "BASE"
+value = "arr:0.25"
+when = [["new_sites_90d", ">=", 2]]
+reason = "{new_sites_90d} new sites became active in the last 12 weeks."
+playbook = "Ask about the rollout plan for the rest of the estate (the ENEMALTA path: one site, then the whole network)."
+
+[[rule]]
+id = "E03"
+kind = "expansion"
+title = "Substations already connected"
+severity = "medium"
+module = "OTC"
+value = "list"
+when = [["has_ASSET", "==", true], ["has_OTC", "==", false]]
+reason = "Asset Management already connects their sites on the shared tenant, so OT Companion can reuse the same devices."
+playbook = "Show what an OT inventory of their already-connected assets would look like."
+
+[[rule]]
+id = "E04"
+kind = "expansion"
+title = "NIS2 pressure without OT security"
+severity = "high"
+module = "OTC"
+value = "list"
+when = [["nis2_in_scope", "==", true], ["has_OTC", "==", false]]
+reason = "In NIS2 scope (status in country: {nis2_status}) but no OT Companion."
+playbook = "Offer a short NIS2 readiness conversation: inventory, vulnerability handling and evidence for the auditor."
+
+[[rule]]
+id = "E05"
+kind = "expansion"
+title = "Ready for detection (SIEM)"
+severity = "medium"
+module = "SIEM"
+value = "list"
+when = [["has_OTC", "==", true], ["inventory_coverage", ">=", 0.90], ["crit_vulns_unack", "<", 10], ["has_SIEM", "==", false]]
+reason = "OT inventory is {inventory_coverage:.0%} complete and alerts are being handled. Posture is in place; detection and response is the next layer."
+playbook = "Explain the OT Companion + SIEM pairing using their own inventory as the starting point."
+
+[[rule]]
+id = "E06"
+kind = "expansion"
+title = "Patching handled outside the tool"
+severity = "medium"
+module = "OTC_PATCH"
+value = "list"
+when = [["has_OTC_VULN", "==", true], ["has_OTC_PATCH", "==", false], ["crit_vulns_open", ">=", 10]]
+reason = "{crit_vulns_open} open critical CVEs and patching is tracked outside OT Companion (mean time to patch {mttp_days:.0f} days)."
+playbook = "Demo the patch workflow on their own open vulnerabilities."
+
+[[rule]]
+id = "E07"
+kind = "expansion"
+title = "Inventory without vulnerability monitoring"
+severity = "medium"
+module = "OTC_VULN"
+value = "list"
+when = [["has_OTC", "==", true], ["has_OTC_VULN", "==", false], ["inventory_coverage", ">=", 0.5]]
+reason = "{ot_assets_inventoried} OT assets are inventoried but not checked against known vulnerabilities."
+playbook = "Run a one-off match of their inventory against current CVEs and walk through the result."
+
+[[rule]]
+id = "E08"
+kind = "expansion"
+title = "Out of user licences"
+severity = "low"
+module = "BASE"
+value = "arr:0.10"
+when = [["license_utilization", ">=", 0.90]]
+reason = "{license_utilization:.0%} of licensed users are active every week."
+playbook = "Ask which teams are waiting for access."
