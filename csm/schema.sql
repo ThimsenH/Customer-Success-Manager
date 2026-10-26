@@ -54,6 +54,7 @@ CREATE TABLE contacts (
     account_id   INTEGER NOT NULL REFERENCES accounts(id),
     name         TEXT NOT NULL,
     title        TEXT NOT NULL,
+    email        TEXT NOT NULL,
     is_champion  INTEGER NOT NULL DEFAULT 0,
     is_sponsor   INTEGER NOT NULL DEFAULT 0,
     left_on      TEXT                         -- null while still at the customer
@@ -175,6 +176,7 @@ CREATE TABLE signals (
     title          TEXT NOT NULL,
     reason         TEXT NOT NULL,
     playbook       TEXT NOT NULL,
+    suggested_action TEXT,
     module_code    TEXT REFERENCES modules(code),
     est_value_eur  INTEGER
 );

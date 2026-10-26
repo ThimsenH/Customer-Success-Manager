@@ -187,6 +187,13 @@ def _d(days_ago):
     return (AS_OF - timedelta(days=days_ago)).isoformat()
 
 
+def _slug(text):
+    """ASCII e-mail part. The .example domain is reserved, so these addresses never reach anyone."""
+    for src, dst in {"æ": "ae", "ø": "o", "å": "a", "ä": "a", "ö": "o", "é": "e"}.items():
+        text = text.lower().replace(src, dst)
+    return "".join(ch for ch in text if ch.isalnum())
+
+
 def _round_price(value):
     return int(round(value / 100.0) * 100)
 
@@ -241,6 +248,7 @@ def build(path=None):
         ]
         for (title, champ, sponsor, left), first, last in zip(contacts, names, surnames):
             add("contacts", account_id=acc_id, name=f"{first} {last}", title=title,
+                email=f"{_slug(first)}.{_slug(last)}@{_slug(a['name'].split()[0])}.example",
                 is_champion=champ, is_sponsor=sponsor, left_on=left)
 
         # Subscriptions -------------------------------------------------------

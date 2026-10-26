@@ -2,7 +2,7 @@
 
 import pytest
 
-from csm import generate, health, pipeline
+from csm import generate, health, journal, pipeline
 from csm.db import read
 from csm.signals import evaluate, matches
 
@@ -25,8 +25,11 @@ EXPECTED = {
 
 @pytest.fixture(scope="module")
 def conn(tmp_path_factory):
-    conn = generate.build(tmp_path_factory.mktemp("db") / "test.db")
-    pipeline.analyse(conn)
+    folder = tmp_path_factory.mktemp("db")
+    conn = generate.build(folder / "test.db")
+    jconn = journal.connect(folder / "journal.db", seed=False)
+    journal.seed_demo(jconn, dict(conn.execute("SELECT name, id FROM accounts").fetchall()))
+    pipeline.analyse(conn, journal_conn=jconn)
     return conn
 
 

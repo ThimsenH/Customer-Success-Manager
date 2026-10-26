@@ -125,3 +125,69 @@ def sales_note(opp, metrics):
     if isinstance(opp["partner"], str):
         lines.append(f"Partner-led account: align with {opp['partner']} before contacting the customer.")
     return "\n".join(lines)
+
+
+# --- The CSM's own input (journal) ----------------------------------------------------
+
+def journal_state(jconn, data):
+    """Decisions, notes, assessments and plans, plus the decision status of every signal."""
+    from . import journal
+
+    decisions = [dict(r) for r in jconn.execute("SELECT * FROM decisions ORDER BY created_on DESC, id DESC")]
+    sig = data["signals"].copy()
+    statuses = [journal.signal_status(decisions, r.account_id, r.rule_id) for r in sig.itertuples()]
+    sig["status"] = [s for s, _ in statuses]
+    sig["decision_id"] = [d["id"] if d else None for _, d in statuses]
+    names = data["accounts"].set_index("id")["name"]
+    dec = pd.DataFrame(decisions)
+    if not dec.empty:
+        dec["account"] = dec["account_id"].map(names)
+    notes = pd.DataFrame([dict(r) for r in jconn.execute("SELECT * FROM notes ORDER BY written_on DESC")])
+    assessments = pd.DataFrame([dict(r) for r in jconn.execute(
+        "SELECT * FROM assessments ORDER BY written_on DESC, id DESC")])
+    latest = assessments.drop_duplicates("account_id").set_index("account_id") if not assessments.empty else assessments
+    plans = {r["account_id"]: dict(r) for r in jconn.execute("SELECT * FROM account_plans")}
+    return {"decisions": dec, "signals": sig, "notes": notes, "assessments": assessments,
+            "assessment": latest, "plans": plans}
+
+
+def needs_decision(state):
+    return state["signals"][state["signals"]["status"] == "Needs decision"]
+
+
+def effectiveness(state, data, weeks_after=4):
+    """Health change from the week an action started to `weeks_after` weeks later."""
+    dec = state["decisions"]
+    if dec.empty:
+        return pd.DataFrame()
+    done = dec[(dec["status"] == "done") & ~dec["decision"].isin(["Monitor", "Dismiss"])]
+    h = data["health"]
+    rows = []
+    for d in done.itertuples():
+        hist = h[h["account_id"] == d.account_id].sort_values("as_of")
+        before = hist[hist["as_of"] <= d.created_on]
+        after_day = (pd.Timestamp(d.created_on) + pd.Timedelta(weeks=weeks_after)).date().isoformat()
+        after = hist[hist["as_of"] <= after_day]
+        if before.empty or after.empty or after["as_of"].iloc[-1] <= before["as_of"].iloc[-1]:
+            continue
+        rows.append({"decision": d.decision, "outcome": d.outcome,
+                     "health_change": after["total"].iloc[-1] - before["total"].iloc[-1]})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.groupby("decision").agg(
+        actions=("outcome", "count"),
+        health_change=("health_change", "mean"),
+        helped=("outcome", lambda o: (o.isin(["Solved", "Improved"])).mean()),
+    ).reset_index().sort_values("helped", ascending=False)
+
+
+def main_contact(data, account_id):
+    """Champion if still there, otherwise the sponsor, otherwise anyone still at the customer."""
+    c = data["contacts"]
+    c = c[(c["account_id"] == account_id) & c["left_on"].isna()]
+    for flag in ("is_champion", "is_sponsor"):
+        hit = c[c[flag] == 1]
+        if not hit.empty:
+            return hit.iloc[0]
+    return c.iloc[0] if not c.empty else None

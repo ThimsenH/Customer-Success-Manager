@@ -69,6 +69,7 @@ def evaluate(m, rules, prices):
             "title": rule["title"],
             "reason": _fmt.format(rule["reason"], **m),
             "playbook": playbook,
+            "suggested_action": rule.get("action"),
             "module_code": rule.get("module"),
             "est_value_eur": estimate_value(rule, m, prices),
         })

@@ -3,18 +3,19 @@
 Run:  streamlit run app.py
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from csm import generate, pipeline
+from csm import generate, journal, links, pipeline
 from csm.config import AS_OF, HEALTH_BANDS, HEALTH_WEIGHTS, WEAKEST_PART_MARGIN
 from csm.db import DB_PATH, connect
 from csm.metrics import METRIC_DOCS
 from csm.signals import load_rules
-from csm.views import CHECK, FIX, READY, load, region_summary, sales_note
+from csm.views import (CHECK, FIX, READY, effectiveness, journal_state, load, main_contact, needs_decision,
+                       region_summary, sales_note)
 
 st.set_page_config(page_title="Nordic CS Radar", page_icon=":material/radar:", layout="wide")
 
@@ -67,6 +68,11 @@ def open_account(account_id):
     st.switch_page(PAGES["account"])
 
 
+def open_button(container, label, key, account_id):
+    if container.button(label, key=key, width="stretch"):
+        open_account(account_id)
+
+
 # --- Data ------------------------------------------------------------------------
 @st.cache_data
 def get_data(db_mtime):
@@ -76,11 +82,215 @@ def get_data(db_mtime):
     return data
 
 
-if not DB_PATH.exists():
+def db_is_current():
+    """False if the database is missing or was built by an older version of the schema."""
+    if not DB_PATH.exists():
+        return False
+    conn = connect()
+    try:
+        conn.execute("SELECT suggested_action FROM signals LIMIT 1")
+        conn.execute("SELECT email FROM contacts LIMIT 1")
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+if not db_is_current():
     with st.spinner("Generating synthetic portfolio…"):
         generate.build().close()
         pipeline.analyse(connect())
 DATA = get_data(DB_PATH.stat().st_mtime)
+
+# The CSM's own input lives in a separate journal database and is read fresh on every run.
+JCONN = journal.connect()
+STATE = journal_state(JCONN, DATA)
+TODAY = journal.today()
+RULES = {r["id"]: r for r in load_rules()}
+SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+STATUS_BADGE = {"Needs decision": ("red", "pending_actions"), "In progress": ("blue", "autorenew"),
+                "Monitoring": ("gray", "schedule"), "Dismissed": ("gray", "block"), "Action done": ("green", "task_alt")}
+MEETING_MINUTES = {"Call": 30, "On-site visit": 120, "Success review / QBR": 60, "Training / workshop": 90}
+CUSTOMER_MESSAGES = {
+    "Call": ("Short call this week?",
+             "Hi {first},\n\nI'd like to hear how things are going with Electrification X on your side. "
+             "Do you have 20 minutes this week?\n\nBest regards"),
+    "On-site visit": ("Visit to {account}",
+                      "Hi {first},\n\nI'd like to visit you and see how you use Electrification X in daily operations. "
+                      "Would a day in the next two weeks work?\n\nBest regards"),
+    "Success review / QBR": ("Success review: results and next steps",
+                             "Hi {first},\n\nIt's time to look back at what we agreed and set objectives for the next "
+                             "quarter. Could we find an hour in the coming weeks?\n\nBest regards"),
+    "Email / check-in": ("Checking in", "Hi {first},\n\nJust checking in: is there anything we can help with right "
+                                        "now?\n\nBest regards"),
+    "Training / workshop": ("Training for your team",
+                            "Hi {first},\n\nWe could run a short session for more of your team, for example field "
+                            "technicians or the OT security team. Would that be useful?\n\nBest regards"),
+}
+# Internal hand-offs go to placeholder addresses (.example never delivers).
+INTERNAL_RECIPIENTS = {"Escalate internally": "support-escalation@siemens-team.example",
+                       "Involve Sales": "sales-nordics@siemens-team.example"}
+
+
+def clean(record):
+    """Row dict with pandas NaN turned into None."""
+    return {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in record.items()}
+
+
+def status_badge(status):
+    return badge(status, *STATUS_BADGE[status])
+
+
+def account_name(account_id):
+    return DATA["summary"].set_index("id").loc[account_id, "name"]
+
+
+def account_signals(account_id, kind=None):
+    sig = STATE["signals"]
+    sig = sig[sig["account_id"] == account_id]
+    if kind:
+        sig = sig[sig["kind"] == kind]
+    return sig.assign(o=sig["severity"].map(SEV_ORDER)).sort_values("o")
+
+
+def refresh(reanalyse=False):
+    """Save done: re-run the current-week analysis if contact data changed, then redraw."""
+    if reanalyse:
+        conn = connect()
+        pipeline.analyse(conn, journal_conn=JCONN, history=False)
+        conn.close()
+        get_data.clear()
+    st.rerun()
+
+
+def decide_button(container, account_id, rule_ids, key, label="Decide"):
+    rule_ids = list(rule_ids)
+    if rule_ids and container.button(label, key=key, type="primary", width="stretch", icon=":material/gavel:"):
+        decide_dialog(account_id, rule_ids)
+
+
+@st.dialog("Decide what to do", width="large")
+def decide_dialog(account_id, rule_ids):
+    sig = account_signals(account_id)
+    sig = sig[sig["rule_id"].isin(rule_ids)]
+    st.markdown(f"**{account_name(account_id)}**")
+    labels = {r.rule_id: f"{r.title} ({r.severity})" for r in sig.itertuples()}
+    chosen = st.multiselect("Signals this decision covers", list(labels), default=list(labels), format_func=labels.get)
+    picked = sig[sig["rule_id"].isin(chosen)] if chosen else sig
+    for r in picked.itertuples():
+        st.caption(f"{r.title}: {r.reason}")
+    top = picked.iloc[0]
+    suggested = top["suggested_action"] or "Call"
+    options = list(journal.DECISIONS)
+    decision = st.selectbox("Decision", options, index=options.index(suggested),
+                            help=f"Suggested for this signal: {suggested}")
+    due_on = review_on = None
+    if decision == "Monitor":
+        review_on = st.date_input("Look at it again on", TODAY + timedelta(days=14), min_value=TODAY)
+        note = st.text_area("Why wait?")
+    elif decision == "Dismiss":
+        note = st.text_area("Why is this not a real problem? (required)")
+        st.caption(f"The signal stays quiet for {journal.DISMISS_DAYS} days. Dismissal reasons help tune the rules.")
+    else:
+        due_on = st.date_input("Due", TODAY + timedelta(days=journal.DUE_DAYS[top["severity"]]), min_value=TODAY)
+        note = st.text_area("Note (optional)")
+    if st.button("Save decision", type="primary", disabled=not chosen):
+        if decision == "Dismiss" and not note.strip():
+            st.error("Please give a reason for dismissing.")
+            return
+        journal.decide(JCONN, account_id, chosen, decision, note, due_on, review_on)
+        refresh()
+
+
+@st.dialog("Log the result")
+def complete_dialog(d):
+    st.markdown(f"**{d['decision']}** · {d['account']}")
+    outcome = st.radio("Outcome", journal.OUTCOMES, horizontal=True)
+    agreed = None
+    if d["decision"] == "Success review / QBR":
+        agreed = st.checkbox("Objectives agreed with the customer", value=True)
+    note = st.text_area("What happened?")
+    direct, _ = journal.DECISIONS[d["decision"]]
+    if direct:
+        st.caption("This counts as direct contact with the customer and updates the account's signals.")
+    left, right = st.columns(2)
+    if left.button("Save result", type="primary", width="stretch"):
+        journal.complete(JCONN, d["id"], outcome, note, agreed)
+        refresh(reanalyse=direct)
+    if right.button("Cancel the action instead", width="stretch"):
+        journal.cancel(JCONN, d["id"])
+        refresh()
+
+
+def decision_reasons(d):
+    sig = STATE["signals"]
+    reasons = []
+    for rid in d["rule_ids"].split(","):
+        hit = sig[(sig["account_id"] == d["account_id"]) & (sig["rule_id"] == rid)]
+        reasons.append(f"{hit.iloc[0]['title']}: {hit.iloc[0]['reason']}" if not hit.empty
+                       else RULES[rid]["title"] if rid in RULES else rid)
+    return reasons
+
+
+@st.dialog("Salesforce task (preview)", width="large")
+def salesforce_dialog(d):
+    st.caption("With an integration, the radar would create this task through the Salesforce API, so Sales and "
+               "account management see it too. Calls and visits logged in Salesforce would flow back into the "
+               "radar as direct contact.")
+    st.json(links.salesforce_task(d, d["account"], decision_reasons(d), d["crm_task_id"]))
+
+
+def handoff_links(d, key):
+    """Outlook, Teams, calendar and Salesforce hand-offs for one action."""
+    contact = main_contact(DATA, d["account_id"])
+    acc = DATA["summary"].set_index("id").loc[d["account_id"]]
+    kind = d["decision"]
+    if kind in CUSTOMER_MESSAGES:
+        to = [contact["email"]] if contact is not None else []
+        first = contact["name"].split()[0] if contact is not None else ""
+        subject, body = CUSTOMER_MESSAGES[kind]
+        subject, body = subject.format(account=acc["name"]), body.format(first=first)
+    else:
+        if kind == "Go through partner" and isinstance(acc["partner"], str):
+            to = [f"contact@{acc['partner'].split()[0].lower()}.example"]
+        else:
+            to = [INTERNAL_RECIPIENTS.get(kind, "account-team@siemens-team.example")]
+        subject = f"{acc['name']}: {kind.lower()}"
+        body = "Context from the CS radar:\n" + "\n".join(f"- {r}" for r in decision_reasons(d))
+        if d.get("note"):
+            body += f"\n\nNote: {d['note']}"
+    start = links.meeting_start(date.fromisoformat(d["due_on"]))
+    minutes = MEETING_MINUTES.get(kind, 30)
+    cols = st.columns(4)
+    cols[0].link_button("Outlook email", links.mailto(to, subject, body), icon=":material/mail:", width="stretch")
+    if kind in MEETING_MINUTES:
+        cols[1].link_button("Teams meeting", links.teams_meeting(f"{acc['name']}: {kind}", start, minutes, to, body),
+                            icon=":material/videocam:", width="stretch")
+    else:
+        cols[1].link_button("Teams chat", links.teams_chat(to, f"{subject}\n{body}"), icon=":material/chat:",
+                            width="stretch")
+    cols[2].download_button("Calendar (.ics)", links.ics(f"decision-{d['id']}", f"{acc['name']}: {kind}", start, minutes,
+                                                         body, to, "Microsoft Teams"),
+                            file_name=f"{kind.split()[0].lower()}-{d['id']}.ics", mime="text/calendar",
+                            icon=":material/event:", width="stretch", key=f"ics-{key}")
+    if cols[3].button("Salesforce task", key=f"sf-{key}", icon=":material/cloud:", width="stretch"):
+        salesforce_dialog(d)
+
+
+def action_card(d, key):
+    with st.container(border=True):
+        head, btn = st.columns([5, 1])
+        due = date.fromisoformat(d["due_on"])
+        days = (due - TODAY).days
+        due_badge = (badge(f"Overdue by {-days} days", "red", "alarm") if days < 0 else
+                     badge("Due today", "orange", "today") if days == 0 else badge(f"Due in {days} days", "blue", "event"))
+        head.markdown(f"**{d['decision']}** · {d['account']} &nbsp; {due_badge}  \n"
+                      f":gray[Covers: {' · '.join(decision_reasons(d))}]"
+                      + (f"  \n{d['note']}" if d.get("note") else ""))
+        if btn.button("Log result", key=f"done-{key}", width="stretch", icon=":material/check:"):
+            complete_dialog(d)
+        handoff_links(d, key)
 
 
 def filtered():
@@ -110,6 +320,14 @@ def page_portfolio():
     cols[3].metric("Renewals in 90 days", len(renew), eur(renew["arr_eur"].sum()), delta_color="off", delta_arrow="off", border=True)
     cols[4].metric("Expansion ready now", eur(ready["est_value_eur"].sum() if not ready.empty else 0),
                    f"{len(ready)} opportunities", delta_color="off", delta_arrow="off", border=True)
+
+    nd = needs_decision(STATE)
+    nd = nd[nd["account_id"].isin(s["id"])]
+    dec = STATE["decisions"]
+    overdue = dec[(dec["status"] == "open") & (dec["due_on"] < TODAY.isoformat())] if not dec.empty else dec
+    st.page_link(PAGES["actions"], icon=":material/task_alt:",
+                 label=f"{len(nd)} signals on {nd['account_id'].nunique()} accounts need your decision · "
+                       f"{len(overdue)} actions overdue → Action center")
 
     left, right = st.columns(2)
     with left:
@@ -151,7 +369,7 @@ def page_portfolio():
                 a, b = st.columns([4, 1])
                 a.markdown(f"**{r.name}** · {COUNTRY_NAMES[r.country]} · {eur(r.arr_eur)}  \n"
                            f"{band_badge(r.band)} &nbsp; {worst['title']}: {worst['reason']}")
-                b.button("Open", key=f"risk-{r.id}", on_click=open_account, args=(r.id,), width="stretch")
+                open_button(b, "Open", f"risk-{r.id}", r.id)
     with right:
         st.subheader("Top expansion opportunities")
         for r in (ready.head(6).itertuples() if not ready.empty else []):
@@ -159,8 +377,7 @@ def page_portfolio():
                 a, b = st.columns([4, 1])
                 a.markdown(f"**{r.account}** · {COUNTRY_NAMES[r.country]} · **{eur(r.est_value_eur)}**  \n"
                            f"{r.module}: {r.reasons[0]}")
-                b.button("Open", key=f"exp-{r.account_id}-{r.module_code}", on_click=open_account,
-                         args=(r.account_id,), width="stretch")
+                open_button(b, "Open", f"exp-{r.account_id}-{r.module_code}", r.account_id)
 
 
 def page_regions():
@@ -231,11 +448,13 @@ def page_risk():
     st.caption("Accounts with risk signals, ranked by priority: severity points weighted by the account's share "
                "of its region's ARR. The same problem ranks higher where one customer carries the region.")
     risky = s[s["n_risks"] > 0].sort_values("priority", ascending=False)
-    sig = DATA["signals"]
-    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
     table = risky[["id", "name", "country", "health", "band", "arr_eur", "days_to_renewal", "n_risks", "priority"]].copy()
     table["country"] = table["country"].map(COUNTRY_NAMES)
+    open_sig = needs_decision(STATE)
+    table["undecided"] = table["id"].map(open_sig[open_sig["kind"] == "risk"].groupby("account_id").size()).fillna(0).astype(int)
+    view = STATE["assessment"]
+    table["my_view"] = table["id"].map(view["rating"]) if not view.empty else None
     event = st.dataframe(table.drop(columns="id"), hide_index=True, width="stretch", on_select="rerun",
                          selection_mode="single-row", column_config={
                              "name": "Account", "country": "Country",
@@ -244,24 +463,25 @@ def page_risk():
                              "arr_eur": st.column_config.NumberColumn("ARR", format="euro"),
                              "days_to_renewal": st.column_config.NumberColumn("Renewal in", format="%d days"),
                              "n_risks": "Signals", "priority": st.column_config.NumberColumn("Priority", format="%.1f"),
+                             "undecided": "Need decision", "my_view": "Your view",
                          })
     if event.selection.rows:
         open_account(table.iloc[event.selection.rows[0]]["id"])
     st.caption("Select a row to open the account.")
 
     for r in risky.itertuples():
-        rs = sig[(sig["account_id"] == r.id) & (sig["kind"] == "risk")].copy()
-        rs["o"] = rs["severity"].map(sev_order)
+        rs = account_signals(r.id, "risk")
         with st.container(border=True):
             head, btn = st.columns([5, 1])
             channel = f"via {r.partner}" if r.channel == "Partner" else "direct"
             head.markdown(f"### {r.name}\n{band_badge(r.band)} &nbsp; Health **{r.health:.0f}** · "
                           f"{COUNTRY_NAMES[r.country]} · {r.segment} · {eur(r.arr_eur)} ARR · "
                           f"renewal in {r.days_to_renewal} days · {channel}")
-            btn.button("Open account", key=f"radar-{r.id}", on_click=open_account, args=(r.id,), width="stretch")
-            for x in rs.sort_values("o").itertuples():
-                st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])} **{x.title}**: {x.reason}  \n"
-                            f":gray[Next step: {x.playbook}]")
+            open_button(btn, "Open account", f"radar-{r.id}", r.id)
+            decide_button(btn, r.id, rs.loc[rs["status"] == "Needs decision", "rule_id"], f"decide-radar-{r.id}")
+            for x in rs.itertuples():
+                st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])} **{x.title}**: {x.reason} "
+                            f"&nbsp; {status_badge(x.status)}  \n:gray[Next step: {x.playbook}]")
 
 
 def page_expansion():
@@ -300,8 +520,12 @@ def page_expansion():
                           f"{badge(r.readiness, *READINESS_BADGE[r.readiness])} &nbsp; **{eur(r.est_value_eur)}** per year "
                           f"(estimate) · {COUNTRY_NAMES[r.country]} · health {r.health:.0f}"
                           + (f" · via {r.partner}" if isinstance(r.partner, str) else ""))
-            btn.button("Open account", key=f"opp-{r.account_id}-{r.module_code}", on_click=open_account,
-                       args=(r.account_id,), width="stretch")
+            open_button(btn, "Open account", f"opp-{r.account_id}-{r.module_code}", r.account_id)
+            es = account_signals(r.account_id, "expansion")
+            es = es[es["rule_id"].isin(r.rule_ids)]
+            decide_button(btn, r.account_id, es.loc[es["status"] == "Needs decision", "rule_id"],
+                          f"decide-opp-{r.account_id}-{r.module_code}")
+            head.markdown(" ".join(sorted({status_badge(x) for x in es["status"]})))
             for title, reason in zip(r.titles, r.reasons):
                 st.markdown(f"- **{title}**: {reason}")
             st.markdown(f":gray[Next step: {r.playbooks[0]}]")
@@ -354,24 +578,33 @@ def page_account():
         fig.update_yaxes(range=[0, 100])
         st.plotly_chart(style(fig, height=240, legend=False), width="stretch")
 
-    risks = DATA["signals"][(DATA["signals"]["account_id"] == acc_id) & (DATA["signals"]["kind"] == "risk")]
+    risks = account_signals(acc_id, "risk")
+    exp = account_signals(acc_id, "expansion")
     opps = DATA["opportunities"]
     opps = opps[opps["account_id"] == acc_id] if not opps.empty else opps
+    undecided = pd.concat([risks, exp])
+    undecided = undecided.loc[undecided["status"] == "Needs decision", "rule_id"]
+    head, btn = st.columns([5, 1])
+    head.subheader("Signals")
+    decide_button(btn, acc_id, undecided, f"decide-acc-{acc_id}", label=f"Decide ({len(undecided)})")
     left, right = st.columns(2)
     with left:
-        st.subheader("Risk signals")
+        st.markdown("**Risk**")
         if risks.empty:
             st.markdown(":green[No risk signals.]")
         for x in risks.itertuples():
-            st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])} **{x.title}**: {x.reason}  \n"
-                        f":gray[Next step: {x.playbook}]")
+            st.markdown(f"{badge(x.severity.title(), *SEVERITY_BADGE[x.severity])} **{x.title}**: {x.reason} "
+                        f"&nbsp; {status_badge(x.status)}  \n:gray[Next step: {x.playbook}]")
     with right:
-        st.subheader("Expansion signals")
+        st.markdown("**Expansion**")
         if opps.empty:
             st.markdown(":gray[No expansion signals.]")
         for x in opps.itertuples():
+            statuses = " ".join(sorted({status_badge(v) for v in exp.loc[exp["rule_id"].isin(x.rule_ids), "status"]}))
             st.markdown(f"{badge(x.readiness, *READINESS_BADGE[x.readiness])} **{x.module}** ({eur(x.est_value_eur)}): "
-                        + " ".join(x.reasons))
+                        + " ".join(x.reasons) + f" &nbsp; {statuses}")
+
+    your_view(acc_id, a)
 
     st.subheader("Modules and usage")
     left, right = st.columns([2, 3])
@@ -429,7 +662,8 @@ def page_account():
         for x in c.itertuples():
             role = " · champion" if x.is_champion else (" · sponsor" if x.is_sponsor else "")
             gone = f" :red[(left {x.left_on})]" if x.left_on else ""
-            st.markdown(f"{x.name}, {x.title}{role}{gone}")
+            chat = "" if x.left_on else f" · [Teams]({links.teams_chat([x.email], 'Hi ' + x.name.split()[0] + ',')})"
+            st.markdown(f"{x.name}, {x.title}{role}{gone}{chat}")
     with mid:
         st.markdown("**Recent reviews**")
         r = DATA["reviews"][DATA["reviews"]["account_id"] == acc_id].sort_values("date", ascending=False).head(4)
@@ -445,6 +679,153 @@ def page_account():
                     f"{int(((t['priority'] == 'Critical') & t['closed_on'].isna()).sum())} critical open")
         if not t.empty:
             st.markdown(", ".join(f"{k} ({v})" for k, v in t["topic"].value_counts().head(3).items()))
+
+
+def your_view(acc_id, a):
+    """The human side: own assessment, account plan, notes and a timeline of everything that happened."""
+    st.subheader("Your view")
+    current = STATE["assessment"].loc[acc_id] if not STATE["assessment"].empty and acc_id in STATE["assessment"].index else None
+    if current is not None:
+        differs = current["rating"] != a["band"]
+        st.markdown(f"Data says {band_badge(a['band'])} ({a['health']:.0f}) · you say {band_badge(current['rating'])}"
+                    + (" &nbsp; :orange[:material/compare_arrows: your view differs from the data]" if differs else "")
+                    + f"  \n:gray[“{current['reason']}” ({current['written_on'][:10]})]")
+    tab_view, tab_plan, tab_notes, tab_time = st.tabs(["Assessment", "Account plan", "Notes", "Timeline"])
+    with tab_view:
+        with st.form(f"assess-{acc_id}", clear_on_submit=True):
+            options = journal.ASSESSMENTS
+            default = options.index(current["rating"]) if current is not None else options.index(a["band"])
+            rating = st.radio("How do you see this account?", options, index=default, horizontal=True)
+            reason = st.text_input("Why? (what the data can't see)")
+            if st.form_submit_button("Save assessment", type="primary"):
+                journal.set_assessment(JCONN, acc_id, rating, reason)
+                refresh()
+        hist = STATE["assessments"]
+        hist = hist[hist["account_id"] == acc_id] if not hist.empty else hist
+        for x in hist.itertuples():
+            st.markdown(f":gray[{x.written_on[:10]}] {band_badge(x.rating)} {x.reason or ''}")
+    with tab_plan:
+        plan = STATE["plans"].get(acc_id, {})
+        with st.form(f"plan-{acc_id}"):
+            objectives = st.text_area("Objectives agreed with the customer", plan.get("objectives") or "", height=120)
+            strategy = st.text_area("Your strategy for the account", plan.get("strategy") or "", height=100)
+            if st.form_submit_button("Save plan", type="primary"):
+                journal.save_plan(JCONN, acc_id, objectives, strategy)
+                refresh()
+        if plan:
+            st.caption(f"Last updated {plan['updated_on']}")
+    with tab_notes:
+        with st.form(f"note-{acc_id}", clear_on_submit=True):
+            text = st.text_area("Add a note", placeholder="Something you heard, a change at the customer, a gut feeling…")
+            if st.form_submit_button("Add note", type="primary") and text.strip():
+                journal.add_note(JCONN, acc_id, text.strip())
+                refresh()
+        notes = STATE["notes"]
+        notes = notes[notes["account_id"] == acc_id] if not notes.empty else notes
+        for x in notes.itertuples():
+            st.markdown(f":gray[{x.written_on[:10]}] {x.text}")
+    with tab_time:
+        events = []
+        dec = STATE["decisions"]
+        for d in (dec[dec["account_id"] == acc_id].itertuples() if not dec.empty else []):
+            covers = ", ".join(RULES[r]["title"] for r in d.rule_ids.split(",") if r in RULES)
+            events.append((d.created_on, "gavel", f"Decided **{d.decision}** for: {covers}"
+                           + (f". {d.note}" if isinstance(d.note, str) and d.note and d.status != "done" else "")))
+            if d.status == "done":
+                events.append((d.completed_on, "task_alt", f"**{d.decision}** done → **{d.outcome}**"
+                               + (f". {d.note}" if isinstance(d.note, str) and d.note else "")))
+            elif d.status == "cancelled":
+                events.append((d.completed_on, "cancel", f"**{d.decision}** cancelled"))
+        notes = STATE["notes"]
+        for x in (notes[notes["account_id"] == acc_id].itertuples() if not notes.empty else []):
+            events.append((x.written_on[:10], "edit_note", f"Note: {x.text}"))
+        hist = STATE["assessments"]
+        for x in (hist[hist["account_id"] == acc_id].itertuples() if not hist.empty else []):
+            events.append((x.written_on[:10], "person", f"Your assessment: **{x.rating}**. {x.reason or ''}"))
+        for x in DATA["reviews"][DATA["reviews"]["account_id"] == acc_id].sort_values("date").tail(3).itertuples():
+            events.append((x.date, "groups", f"{x.kind} ({'with Siemens' if x.siemens_present else 'partner only'})"))
+        if not events:
+            st.caption("Nothing yet.")
+        for day, icon, text in sorted(events, key=lambda e: e[0], reverse=True):
+            st.markdown(f":gray[{day}] &nbsp; :material/{icon}: {text}")
+
+
+def page_actions():
+    s, _ = filtered()
+    st.title("Action center")
+    st.caption("The radar flags, you decide. Every signal gets a decision: act, monitor until a date, or dismiss "
+               "with a reason. Results feed back into the account's signals.")
+    nd = needs_decision(STATE)
+    nd = nd[nd["account_id"].isin(s["id"])]
+    dec = STATE["decisions"]
+    dec = dec[dec["account_id"].isin(s["id"])] if not dec.empty else dec
+    open_ = dec[dec["status"] == "open"].sort_values("due_on") if not dec.empty else dec
+    overdue = open_[open_["due_on"] < TODAY.isoformat()] if not open_.empty else open_
+    done30 = dec[(dec["status"] == "done") & (dec["completed_on"] >= (TODAY - timedelta(days=30)).isoformat())] \
+        if not dec.empty else dec
+    cols = st.columns(4)
+    cols[0].metric("Signals needing a decision", len(nd), f"on {nd['account_id'].nunique()} accounts",
+                   delta_color="off", delta_arrow="off", border=True)
+    cols[1].metric("Open actions", len(open_), border=True)
+    cols[2].metric("Overdue", len(overdue), border=True)
+    cols[3].metric("Done in the last 30 days", len(done30), border=True)
+
+    t1, t2, t3, t4 = st.tabs([f"Needs decision ({nd['account_id'].nunique()})", f"Open actions ({len(open_)})",
+                              "History", "Did it help?"])
+    with t1:
+        order = s.set_index("id")["priority"]
+        accounts = sorted(nd["account_id"].unique(), key=lambda i: (-order.get(i, 0), account_name(i)))
+        for acc_id in accounts:
+            a = s.set_index("id").loc[acc_id]
+            sig = nd[nd["account_id"] == acc_id].assign(o=lambda d: d["severity"].map(SEV_ORDER)).sort_values("o")
+            with st.container(border=True):
+                head, btn = st.columns([5, 1])
+                head.markdown(f"**{a['name']}** · {COUNTRY_NAMES[a['country']]} · {eur(a['arr_eur'])} &nbsp; "
+                              f"{band_badge(a['band'])}")
+                decide_button(btn, acc_id, sig["rule_id"], f"decide-ac-{acc_id}")
+                open_button(btn, "Open account", f"open-ac-{acc_id}", acc_id)
+                for x in sig.itertuples():
+                    kind = badge("Expansion", "green", "trending_up") if x.kind == "expansion" else \
+                        badge(x.severity.title(), *SEVERITY_BADGE[x.severity])
+                    head.markdown(f"{kind} **{x.title}**: {x.reason} :gray[· suggested: {x.suggested_action}]")
+    with t2:
+        if open_.empty:
+            st.caption("No open actions.")
+        for d in open_.to_dict("records"):
+            action_card(clean(d), d["id"])
+    with t3:
+        hist = dec[dec["status"] != "open"].copy() if not dec.empty else dec
+        if hist.empty:
+            st.caption("No history yet.")
+        else:
+            hist["when"] = hist["completed_on"].fillna(hist["created_on"])
+            hist["covers"] = hist["rule_ids"].map(lambda r: ", ".join(RULES[x]["title"] for x in r.split(",") if x in RULES))
+            st.dataframe(hist.sort_values("when", ascending=False)[["when", "account", "decision", "status", "outcome",
+                                                                     "covers", "note"]],
+                         hide_index=True, width="stretch",
+                         column_config={"when": "Date", "account": "Account", "decision": "Decision",
+                                        "status": "Status", "outcome": "Outcome", "covers": "Signals", "note": "Note"})
+    with t4:
+        eff = effectiveness(STATE, DATA)
+        if eff.empty:
+            st.caption("Not enough completed actions yet.")
+        else:
+            st.markdown("Which actions tend to work? Based on the outcome you logged for each completed action.")
+            eff = eff.sort_values("helped")
+            fig = go.Figure(go.Bar(y=eff["decision"], x=eff["helped"], orientation="h", marker_color=SERIES[0],
+                                   text=[f"{h:.0%} of {n}" for h, n in zip(eff["helped"], eff["actions"])],
+                                   textposition="outside",
+                                   hovertemplate="%{y}: %{x:.0%} solved or improved<extra></extra>"))
+            fig.update_xaxes(tickformat=".0%", range=[0, 1.15], title="Share solved or improved")
+            st.plotly_chart(style(fig, height=320, legend=False), width="stretch")
+            st.dataframe(eff.sort_values("helped", ascending=False), hide_index=True, width="stretch", column_config={
+                "decision": "Action", "actions": "Completed",
+                "helped": st.column_config.NumberColumn("Solved or improved", format="percent"),
+                "health_change": st.column_config.NumberColumn("Health change after 4 weeks", format="%+.1f"),
+            })
+            st.caption("With real data, comparing your logged outcome with the measured health change shows whether "
+                       "an action really moved the account. In this prototype the health history is synthetic and "
+                       "doesn't react to actions, so that column is only illustrative.")
 
 
 def page_method():
@@ -491,13 +872,30 @@ def page_method():
         f"so a strong relationship can't hide a broken onboarding.  \n"
         "Bands: " + " · ".join(f"{band_badge(label)} from {lower}" for lower, label, _ in HEALTH_BANDS))
 
+    st.subheader("From signal to action")
+    st.markdown(
+        "The radar only flags. **You decide** what to do with each signal: call, visit, review, training, "
+        "escalate, involve Sales, go through the partner, **monitor** until a date, or **dismiss** with a reason. "
+        "A decision keeps the signal quiet while the action is open, until the monitoring date, or for "
+        f"{journal.DISMISS_DAYS} days after a dismissal. {journal.AFTER_DONE_DAYS} days after an action is done, the "
+        "signal comes back if the problem is still there.  \n"
+        "Completed calls, visits, reviews and trainings count as **direct contact** and update the metrics, so a "
+        "logged call can clear the 'no direct view' signal.  \n"
+        "Your **own assessment, account plan and notes** sit next to the data. When your view differs from the "
+        "health score, the account page says so: that's often where the interesting conversations are.")
+    st.markdown(
+        "**Where it would live in production:** decisions and actions as Salesforce tasks (so Sales and account "
+        "management see them), emails and meetings in Outlook and Teams. In the prototype, email, Teams and calendar "
+        "links work as they are, and the Salesforce task is shown as a preview. Your input is stored in "
+        "`data/journal.db`, separate from the generated data.")
+
     st.subheader("Rules")
     st.markdown("Every signal comes from a readable rule in `csm/rules.toml`. No black box: "
                 "the reason shown on each signal is the rule's own explanation.")
     rules = pd.DataFrame([{
         "ID": r["id"], "Type": r["kind"].title(), "Signal": r["title"], "Severity": r["severity"],
         "Fires when": " and ".join(f"{a} {op} {v}" for a, op, v in r["when"]),
-        "Suggests": r.get("module", ""),
+        "Suggests": r.get("module", ""), "Suggested action": r.get("action", ""),
     } for r in load_rules()])
     st.dataframe(rules, hide_index=True, width="stretch")
 
@@ -510,6 +908,7 @@ def page_method():
 
 PAGES = {
     "portfolio": st.Page(page_portfolio, title="Portfolio", icon=":material/dashboard:", url_path="portfolio", default=True),
+    "actions": st.Page(page_actions, title="Action center", icon=":material/task_alt:", url_path="actions"),
     "regions": st.Page(page_regions, title="Regions", icon=":material/public:", url_path="regions"),
     "risk": st.Page(page_risk, title="Risk radar", icon=":material/warning:", url_path="risk"),
     "expansion": st.Page(page_expansion, title="Expansion", icon=":material/trending_up:", url_path="expansion"),

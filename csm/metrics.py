@@ -52,7 +52,7 @@ class MetricContext:
     """Holds all source tables once, grouped by account, so metrics can be
     computed for many accounts and dates cheaply."""
 
-    def __init__(self, tables):
+    def __init__(self, tables, touches=()):
         self.accounts = tables["accounts"].set_index("id")
         self.regions = tables["regions"].set_index("country")
         self.partners = tables["partners"].set_index("id")
@@ -65,6 +65,10 @@ class MetricContext:
                 if col in df.columns:
                     df[col] = df[col].map(lambda v: date.fromisoformat(v) if isinstance(v, str) else None)
             self.groups[name] = _by_account(df)
+        # Completed CSM actions (calls, visits, reviews) from the journal.
+        self.touches = {}
+        for t in touches:
+            self.touches.setdefault(t["account_id"], []).append(t)
 
     def table(self, name, account_id):
         return self.groups[name].get(account_id, pd.DataFrame())
@@ -197,8 +201,15 @@ def compute(ctx, account_id, as_of, country_arr=None):
 
     reviews = ctx.table("reviews", account_id)
     if not reviews.empty:
-        reviews = reviews[reviews["date"] <= as_of].sort_values("date")
+        reviews = reviews[reviews["date"] <= as_of]
+    # Logged success reviews count as reviews; every logged call or visit counts as direct contact.
+    touches = [t for t in ctx.touches.get(int(account_id), []) if t["date"] <= as_of]
+    logged = pd.DataFrame([{"date": t["date"], "siemens_present": 1, "objectives_documented": int(t["objectives_agreed"])}
+                           for t in touches if t["is_review"]])
+    if not logged.empty:
+        reviews = pd.concat([reviews, logged], ignore_index=True) if not reviews.empty else logged
     if not reviews.empty:
+        reviews = reviews.sort_values("date")
         m["days_since_review"] = _days_between(as_of, reviews["date"].iloc[-1])
         direct = reviews[reviews["siemens_present"] == 1]
         m["days_since_direct_touch"] = _days_between(as_of, direct["date"].iloc[-1]) if not direct.empty else days_live
@@ -206,6 +217,9 @@ def compute(ctx, account_id, as_of, country_arr=None):
     else:
         m["days_since_review"] = m["days_since_direct_touch"] = days_live
         m["objectives_documented"] = False
+    if touches:
+        latest = max(t["date"] for t in touches)
+        m["days_since_direct_touch"] = min(m["days_since_direct_touch"], _days_between(as_of, latest))
 
     contacts = ctx.table("contacts", account_id)
     still_there = contacts["left_on"].isna() | (contacts["left_on"] > as_of)

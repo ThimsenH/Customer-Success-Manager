@@ -32,11 +32,35 @@ The app opens at http://localhost:8501. If the database is missing, the app buil
 | Page | What it shows |
 |---|---|
 | **Portfolio** | ARR, ARR-weighted health, ARR at risk, renewals in 90 days, top risks and opportunities |
+| **Action center** | Signals waiting for your decision, open actions with Outlook/Teams/calendar/Salesforce hand-offs, history, and which actions tend to work |
 | **Regions** | Norway, Denmark, Sweden, Finland side by side: NIS2 status, concentration, partner share |
 | **Risk radar** | Accounts ranked by priority, each signal with its reason and a suggested next step |
 | **Expansion** | Opportunities by module with evidence, readiness, and a handover note for Sales |
-| **Account detail** | Health breakdown and trend, modules, usage, OT Companion outcomes, relationship |
+| **Account detail** | Health breakdown and trend, signals with decision status, **your view** (assessment, account plan, notes, timeline), modules, usage, OT Companion outcomes, relationship |
 | **How it works** | Data sources, health formula, every rule and metric |
+
+### From signal to action: the human part
+
+The radar flags; the CSM decides. Every signal needs a decision:
+
+- **Act**: call, on-site visit, success review / QBR, email, training, escalate internally, involve Sales,
+  go through the partner. Each rule suggests one; you can pick another. The action gets a due date.
+- **Monitor** until a date you choose, after which the signal comes back.
+- **Dismiss** with a required reason (quiet for 90 days; the reasons help tune the rules).
+
+When you log the result of an action (solved / improved / no change / worse), calls, visits, reviews and trainings
+count as **direct contact** and update the metrics. A logged call on a partner-led account clears its
+"no direct view" signal, for example. Thirty days after an action, the signal comes back if the problem is still there.
+
+Next to the data, every account has **your own view**: an assessment (flagged when it differs from the health
+score), an account plan with agreed objectives, free notes, and a timeline of everything that happened.
+
+**Hand-offs:** each open action has an Outlook email draft, a Teams meeting or chat link, a calendar file (.ics) and
+a preview of the Salesforce task an integration would create. Contacts are fictional and use the reserved
+`.example` domain, so nothing is ever delivered.
+
+Your input is stored in `data/journal.db`, separate from the generated data, so `python -m csm build` keeps it.
+It starts with some demo history; `python -m csm reset-journal` resets it to that.
 
 ### Regional differences built in
 
@@ -71,8 +95,10 @@ csm/health.py       Health score
 csm/rules.toml      Risk and expansion rules
 csm/signals.py      Rule engine
 csm/pipeline.py     Metrics → health → signals, saved to SQLite
+csm/journal.py      Your decisions, actions, notes, assessments and account plans (data/journal.db)
+csm/links.py        Outlook, Teams, calendar and Salesforce hand-offs
 csm/views.py        Data shaping for the dashboard
-tests/              Checks that each scenario triggers the signals it was built for
+tests/              Scenario signals fire as built; decisions and logged contact feed back correctly
 ```
 
 Run the tests with `pytest`.
@@ -81,5 +107,6 @@ Run the tests with `pytest`.
 
 Each source table mirrors what a real system would deliver. Moving to real data means replacing
 `generate.py` with extracts (Salesforce API, Subscription Manager exports, platform usage data) that fill
-the same tables. Metrics, rules and dashboard stay the same. In production, signals could also be
-written back to Salesforce as tasks.
+the same tables. Metrics, rules and dashboard stay the same. In production, decisions and actions would be
+Salesforce tasks (so Sales and account management see them), and activities logged there would flow back
+as direct contact, which replaces the local journal.
